@@ -2,6 +2,7 @@ from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualA
 from app.models.benchmark import BenchmarkPrediction, BenchmarkRun
 from app.models.evaluation import EvaluationCase, EvaluationStatus
 from app.models.collection import Collection, CollectionSource
+from app.models.conversation import ChatMessage, Conversation
 from app.models.correction import ExtractionCorrection
 from app.models.embedding import ContentEmbedding
 from app.models.provenance import ProcessingProvenance
@@ -17,8 +18,10 @@ from app.models.source import Source, SourceKind, SourceStatus
 from app.models.user import User
 
 __all__ = [
+    "ChatMessage",
     "Collection",
     "CollectionSource",
+    "Conversation",
     "ExtractionCorrection",
     "ContentEmbedding",
     "ProcessingProvenance",

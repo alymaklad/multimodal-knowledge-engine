@@ -117,6 +117,17 @@ def capabilities() -> dict[str, object]:
             "embedding_model": settings.embedding_model if settings.embedding_provider != "hashing" else "local-hashing-v1",
             "vector_store": settings.vector_store,
         },
+        "chat": {
+            "provider": settings.chat_provider,
+            "model": {
+                "claude": settings.chat_model,
+                "ollama": f"ollama:{settings.ollama_model}",
+            }.get(settings.chat_provider.lower(), "local-extractive-chat-v1"),
+            "streaming": "server-sent events",
+            "citations": "inline [n] markers resolved to passages with page or timestamp",
+            "history_messages": settings.chat_history_messages,
+            "refusal_fallback": settings.chat_provider.lower() in {"claude", "anthropic"},
+        },
         "answering": {
             "provider": settings.answer_provider,
             "grounded": True,

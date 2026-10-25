@@ -7,8 +7,15 @@ install without the optional model packages still runs the whole pipeline on its
 from __future__ import annotations
 
 from app.core.config import get_settings
-from app.providers.answering import ExtractiveAnswerProvider
-from app.providers.base import AnswerProvider, ExtractionProvider, ImageDescriber, OCRProvider, VisionProvider
+from app.providers.answering import ExtractiveAnswerProvider, ExtractiveChatProvider
+from app.providers.base import (
+    AnswerProvider,
+    ChatProvider,
+    ExtractionProvider,
+    ImageDescriber,
+    OCRProvider,
+    VisionProvider,
+)
 from app.providers.local import (
     EvidenceVisionProvider,
     RuleBasedExtractionProvider,
@@ -84,4 +91,23 @@ def get_answer_provider() -> AnswerProvider:
         from app.providers.claude_answering import ClaudeAnswerProvider
 
         return ClaudeAnswerProvider()
+    if name == "ollama":
+        from app.providers.ollama import OllamaAnswerProvider
+
+        return OllamaAnswerProvider()
     raise ValueError(f"Unsupported answer provider: {name}")
+
+
+def get_chat_provider() -> ChatProvider:
+    name = get_settings().chat_provider.lower()
+    if name in {"extractive", "local"}:
+        return ExtractiveChatProvider()
+    if name in {"claude", "anthropic"}:
+        from app.providers.claude_chat import ClaudeChatProvider
+
+        return ClaudeChatProvider()
+    if name == "ollama":
+        from app.providers.ollama import OllamaChatProvider
+
+        return OllamaChatProvider()
+    raise ValueError(f"Unsupported chat provider: {name}")

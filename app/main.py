@@ -28,6 +28,8 @@ from app.api.knowledge import router as knowledge_router
 from app.api.knowledge import source_router as knowledge_source_router
 from app.api.media import router as media_router
 from app.api.auth import router as auth_router
+from app.api.chat import collection_router as chat_collection_router
+from app.api.chat import router as chat_router
 from app.db.database import SessionLocal, engine
 from app.db.migrate import migrate_database
 import app.models  # noqa: F401 - ensures all ORM tables are registered
@@ -88,6 +90,8 @@ app.include_router(knowledge_router)
 app.include_router(knowledge_source_router)
 app.include_router(media_router)
 app.include_router(auth_router)
+app.include_router(chat_collection_router)
+app.include_router(chat_router)
 
 
 @app.middleware("http")

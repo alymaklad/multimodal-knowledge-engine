@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -95,3 +96,39 @@ class AnswerProvider(ABC):
 
     @abstractmethod
     def answer(self, question: str, evidence: list[EvidenceChunk]) -> GroundedAnswer: ...
+
+
+@dataclass(frozen=True)
+class ChatTurn:
+    """One earlier turn of a conversation, as the model is shown it."""
+
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ChatProviderError(RuntimeError):
+    """The chat model could not answer. The message is safe to show the user."""
+
+
+class ChatRefusedError(ChatProviderError):
+    """The model declined to answer; any text it already streamed must be discarded."""
+
+
+class ChatProvider(ABC):
+    """A conversational model that answers only from numbered evidence passages.
+
+    Answers cite passages inline as [1], [2], ... by their position in `evidence`; the chat service
+    turns those markers into citations and drops any that point at nothing.
+    """
+
+    model: str
+
+    @abstractmethod
+    def rewrite_query(self, history: list[ChatTurn], question: str) -> str:
+        """A standalone search query for a follow-up question, such as "and the second one?"."""
+
+    @abstractmethod
+    def stream_answer(
+        self, history: list[ChatTurn], question: str, evidence: list[EvidenceChunk]
+    ) -> Iterator[str]:
+        """Yield the answer as text fragments, in order."""

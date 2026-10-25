@@ -16,7 +16,7 @@ youtube-transcript-api>=1.0,<2.0
 # VECTOR_STORE=qdrant
 qdrant-client>=1.9,<2.0
 
-# VISION_PROVIDER=claude and/or EXTRACTION_PROVIDER=claude
+# Any Claude provider: VISION_PROVIDER, EXTRACTION_PROVIDER, ANSWER_PROVIDER, or CHAT_PROVIDER=claude
 anthropic>=1.0,<2.0
 
 # OBJECT_STORE=s3 (S3 or MinIO)

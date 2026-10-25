@@ -63,7 +63,7 @@ class ClaudeAnswerProvider(AnswerProvider):
             model=self._model,
             max_tokens=self._max_tokens,
             system=ANSWER_SYSTEM,
-            messages=[{"role": "user", "content": _answer_prompt(question, evidence)}],
+            messages=[{"role": "user", "content": grounded_answer_prompt(question, evidence)}],
             output_config={"format": {"type": "json_schema", "schema": ANSWER_SCHEMA}},
         )
         payload = structured_payload(response)
@@ -80,7 +80,7 @@ class ClaudeAnswerProvider(AnswerProvider):
         )
 
 
-def _answer_prompt(question: str, evidence: list[EvidenceChunk]) -> str:
+def grounded_answer_prompt(question: str, evidence: list[EvidenceChunk]) -> str:
     blocks = [
         f"[Source {chunk.source_id}] {chunk.title}"
         + (f", {chunk.citation}" if chunk.citation else "")

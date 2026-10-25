@@ -20,6 +20,9 @@ class Collection(Base):
 
     # Deleting a collection removes its membership rows only; the sources stay in the library.
     sources: Mapped[list["Source"]] = relationship(secondary="collection_sources", back_populates="collections")
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="collection", cascade="all, delete-orphan"
+    )
 
 
 class CollectionSource(Base):

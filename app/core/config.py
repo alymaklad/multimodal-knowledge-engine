@@ -99,6 +99,19 @@ class Settings(BaseSettings):
     s3_prefix: str = ""
     signed_url_ttl_seconds: int = 900
     answer_provider: str = "extractive"
+    # The chatbot: "extractive" (no model, quotes passages), "claude", or "ollama" (local).
+    chat_provider: str = "extractive"
+    chat_model: str = "claude-opus-5-5"
+    # Claude Opus 5.5 defaults to medium effort; it is set explicitly so the choice is visible.
+    chat_effort: str = "medium"
+    chat_max_tokens: int = 16000
+    # Earlier messages sent with each question, so follow-ups are understood.
+    chat_history_messages: int = 8
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b"
+    # Ollama's default context is 2048 tokens, too small for a question plus eight passages.
+    ollama_num_ctx: int = 8192
+    ollama_timeout_seconds: float = 120.0
     extraction_prompt_version: str = "v1"
     reranker: str = "none"
     reranker_model: str = "BAAI/bge-reranker-base"

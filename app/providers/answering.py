@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
-from app.providers.base import AnswerProvider, EvidenceChunk, GroundedAnswer
+from app.providers.base import AnswerProvider, ChatProvider, ChatTurn, EvidenceChunk, GroundedAnswer
 
 _SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+|\n+")
 _STOPWORDS = {
@@ -69,3 +70,35 @@ def _best_sentence(text: str, terms: set[str]) -> str:
     if overlap == 0:
         sentence = sentences[0]
     return sentence[:400]
+
+
+class ExtractiveChatProvider(ChatProvider):
+    """Chat without a language model: the most relevant sentence of each passage, cited.
+
+    Follow-ups are handled by prefixing a short question with the previous one, which is enough for
+    "what about the second?" to retrieve the same material. A model provider does this properly.
+    """
+
+    model = "local-extractive-chat-v1"
+
+    def rewrite_query(self, history: list[ChatTurn], question: str) -> str:
+        previous = next((turn.content for turn in reversed(history) if turn.role == "user"), None)
+        if previous and len(question.split()) <= 8:
+            return f"{previous} {question}"
+        return question
+
+    def stream_answer(self, history: list[ChatTurn], question: str, evidence: list[EvidenceChunk]) -> Iterator[str]:
+        terms = _query_terms(question)
+        lines = []
+        for number, chunk in enumerate(evidence, start=1):
+            sentence = _best_sentence(chunk.text, terms)
+            if sentence:
+                lines.append(f"- {sentence} [{number}]")
+            if len(lines) >= 5:
+                break
+        if not lines:
+            yield NO_EVIDENCE_ANSWER
+            return
+        yield "From the sources in this collection:\n"
+        for line in lines:
+            yield line + "\n"

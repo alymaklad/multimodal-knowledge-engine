@@ -1218,3 +1218,42 @@ labels, BM25 ordering, page citations in search and answers, and scoped question
 
 This also resolves the "Database migrations" item under "Deferred to the next implementation
 slices" above. Not verified against PostgreSQL: the migrations were exercised on SQLite only.
+
+## Completed — phase 5: the collection chatbot (2026-10-25)
+
+- **Data model** (migration `0002`): `conversations` belong to a collection and owner, with an
+  optional `source_ids` scope (null means every source, including ones added later; sources removed
+  from the collection drop out of the scope silently). `chat_messages` store each turn's text,
+  status (`complete`, `streaming`, `failed`, `refused`, `interrupted`), the query actually searched,
+  the model, and the resolved citations. Deleting a collection deletes its conversations.
+- **A turn** (`app/services/chat.py`): store the question; if there is history, rewrite the
+  follow-up into a standalone query (a failed rewrite falls back to the question as asked); hybrid
+  retrieval over the conversation's scope; stream the answer; resolve inline `[n]` markers to the
+  numbered passages, each citation carrying source, chunk, locator, label ("p. 4"), and snippet;
+  remove markers that point at no passage; store the result. A failure, a refusal, and a client
+  that disconnects mid-answer are each stored as such. One answer at a time per conversation (409);
+  a message left `streaming` by a dead worker stops blocking after ten minutes.
+- **Providers** behind a `ChatProvider` contract, chosen by `CHAT_PROVIDER`, with shared prompts so
+  every model is held to the same rules (answer only from the passages, cite each claim, say so when
+  the collection does not cover it; history is context, not evidence, and old markers are stripped):
+  - `extractive` (default, no model): cites the best sentence of each passage; follow-ups are
+    handled by prefixing a short question with the previous one.
+  - `claude`: `claude-opus-5-5` (`CHAT_MODEL`) streamed via `client.beta.messages.stream`, effort
+    set explicitly (`CHAT_EFFORT=medium`; rewrites run at `low`), and the server-side refusal
+    fallback enabled (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) so a
+    classifier decline is retried on Anthropic's recommended model in the same stream. A refusal
+    that survives it, or a `max_tokens` stop, is caught before the text is trusted.
+  - `ollama`: local models over Ollama's HTTP API, NDJSON streaming, `num_ctx` set explicitly
+    (Ollama's 2048-token default would truncate the passages), and errors that say what to do
+    ("run `ollama pull qwen2.5:7b`", "start it with `ollama serve`"). `ANSWER_PROVIDER=ollama` also
+    serves `/ask`, constrained to the same JSON schema as the Claude answer provider.
+- **API** (`app/api/chat.py`): create, list, read, rename, rescope, and delete conversations; ask
+  with `POST /api/conversations/{id}/messages` (JSON) or `.../messages/stream` (Server-Sent Events:
+  `user_message`, `retrieval`, `delta`, `done`, `error`). The stream runs in its own database
+  session, since the request's may close before the body finishes.
+
+Verified: 302 tests, including cited answers with page labels, follow-up rewriting, SSE event order,
+source scoping, ownership, cascade on collection delete, the busy check, failure / refusal /
+disconnect persistence, citation resolution, and both model providers against fake clients (request
+shape, fallback and effort parameters, stop-reason handling, Ollama NDJSON and error mapping). Not
+verified against live models: neither Claude nor Ollama was called.

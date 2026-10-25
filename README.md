@@ -15,7 +15,11 @@ the sources in a collection, with citations.
 > (with a `SPEECH_PROVIDER`). Segments are packed into overlapping chunks that keep their location,
 > lexical search is BM25 over those chunks, and search results and answers say where each passage
 > is ("p. 4", "12:30–13:45", "§ Setup"). Search and `/ask` accept `source_ids` to use only some of
-> a collection's sources. The sections below still describe the original video pipeline.
+> a collection's sources. Each collection has conversations (`/api/collections/{id}/conversations`,
+> `/api/conversations/{id}/messages[/stream]`): follow-ups are rewritten into standalone queries,
+> answers stream as Server-Sent Events, and inline `[n]` markers resolve to the exact passages
+> cited. `CHAT_PROVIDER` picks `extractive` (no model), `claude`, or `ollama` (local). The sections
+> below still describe the original video pipeline.
 
 The video pipeline turns saved short-form videos into a searchable,
 evidence-backed knowledge base. Each video goes through FFmpeg preparation, then speech

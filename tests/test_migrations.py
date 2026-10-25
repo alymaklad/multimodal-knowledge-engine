@@ -33,6 +33,17 @@ def _head() -> str:
     return ScriptDirectory.from_config(alembic_config()).get_current_head()
 
 
+def _pre_alembic_database(engine) -> None:
+    """What `create_all` produced before migrations existed: the baseline schema, unversioned.
+
+    Built from the baseline revision rather than the live models, so tables added by later
+    revisions never appear in a database that predates them.
+    """
+    with engine.begin() as connection:
+        command.upgrade(alembic_config(connection), BASELINE_REVISION)
+        connection.execute(text("DROP TABLE alembic_version"))
+
+
 def test_the_migrations_build_exactly_the_schema_the_models_describe(engine) -> None:
     """Fails when a model changes without a migration: run `alembic revision --autogenerate`."""
     migrate_database(engine)
@@ -54,7 +65,7 @@ def test_every_migration_can_be_reversed(engine) -> None:
 
 
 def test_a_database_from_create_all_is_adopted_without_losing_rows(engine) -> None:
-    Base.metadata.create_all(engine)
+    _pre_alembic_database(engine)
     with engine.begin() as connection:
         connection.execute(
             text("INSERT INTO collections (user_id, name, created_at, updated_at) VALUES ('u', 'Kept', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
@@ -68,7 +79,7 @@ def test_a_database_from_create_all_is_adopted_without_losing_rows(engine) -> No
 
 def test_an_older_source_library_database_gains_what_it_was_missing(engine) -> None:
     """A phase 1-3 database: no segments table and no chunk locator columns."""
-    Base.metadata.create_all(engine)
+    _pre_alembic_database(engine)
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE source_segments"))
         connection.execute(text("ALTER TABLE content_embeddings DROP COLUMN locator"))
