@@ -1,0 +1,108 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://knowledge:knowledge@postgres:5432/knowledge
+      MEDIA_ROOT: /app/data/media
+      FFMPEG_BINARY: ffmpeg
+      FFPROBE_BINARY: ffprobe
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      QDRANT_URL: http://qdrant:6333
+      VISION_PROVIDER: ${VISION_PROVIDER:-evidence}
+      EXTRACTION_PROVIDER: ${EXTRACTION_PROVIDER:-rule_based}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-extractive}
+      OBJECT_STORE: ${OBJECT_STORE:-local}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+      SECRET_KEY: ${SECRET_KEY:-}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-0}
+      OBJECT_STORE_ROOT: /app/data/objects
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - media_data:/app/data/media
+      - object_data:/app/data/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: .
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://knowledge:knowledge@postgres:5432/knowledge
+      MEDIA_ROOT: /app/data/media
+      FFMPEG_BINARY: ffmpeg
+      FFPROBE_BINARY: ffprobe
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      QDRANT_URL: http://qdrant:6333
+      VISION_PROVIDER: ${VISION_PROVIDER:-evidence}
+      EXTRACTION_PROVIDER: ${EXTRACTION_PROVIDER:-rule_based}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-extractive}
+      OBJECT_STORE: ${OBJECT_STORE:-local}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+      SECRET_KEY: ${SECRET_KEY:-}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-0}
+      OBJECT_STORE_ROOT: /app/data/objects
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - media_data:/app/data/media
+      - object_data:/app/data/objects
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: knowledge
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: knowledge
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+
+  # Provisioned for OBJECT_STORE=s3. The default local store needs no extra service.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  # Provisioned for VECTOR_STORE=qdrant. The default database vector store needs no extra service.
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  media_data:
+  object_data:
+  postgres_data:
+  qdrant_data:
+  minio_data:

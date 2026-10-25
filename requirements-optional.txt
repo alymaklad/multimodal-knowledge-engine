@@ -1,0 +1,31 @@
+# Heavier models kept out of the default install so the API and tests stay quick to set up.
+# Install what you enable in configuration.
+
+# SPEECH_PROVIDER=faster_whisper
+faster-whisper>=1.0,<2.0
+
+# EMBEDDING_PROVIDER=sentence_transformer
+sentence-transformers>=3.0,<6.0
+
+# VECTOR_STORE=qdrant
+qdrant-client>=1.9,<2.0
+
+# VISION_PROVIDER=claude and/or EXTRACTION_PROVIDER=claude
+anthropic>=1.0,<2.0
+
+# OBJECT_STORE=s3 (S3 or MinIO)
+boto3>=1.34,<2.0
+
+# OCR_PROVIDER=paddleocr - scene-text OCR, far better than Tesseract on stylised
+# social-media captions. RapidOCR runs the same PP-OCR models through ONNX Runtime
+# and installs cleanly on Windows; paddleocr needs the PaddlePaddle runtime.
+rapidocr-onnxruntime>=1.3,<2.0
+
+# VISION_PROVIDER=qwen - local multi-frame vision. Install torch from the CUDA index first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+transformers>=4.49
+accelerate>=1.0,<2.0
+# 4-bit quantisation, required to fit a 7B VLM on an 8 GB card
+bitsandbytes>=0.45,<1.0
+# Constrained decoding, so a local model cannot emit schema-invalid JSON
+lm-format-enforcer>=0.10,<1.0

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["C:/Users/Victus/AppData/Local/Temp/claude/C--instagram-multimodal-knowledge-engine/48fbe48f-7e7e-4a2e-90fe-77460fc520a6/scratchpad/run_demo.py"],
+      "port": 8055,
+      "url": "http://localhost:8055"
+    }
+  ]
+}

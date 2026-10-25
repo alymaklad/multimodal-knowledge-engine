@@ -1,0 +1,400 @@
+/* "Evidence First" — the design system exported from Stitch, hand-authored so the client stays
+   dependency-free. The one external request is Google Fonts, and every family has a real fallback
+   stack, so the app is fully usable offline. */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-high: #1c2027;
+  --border: #262b36;
+  --border-soft: #444851;
+  --text: #e2e5f0;
+  --muted: #a7abb5;
+  --dim: #71757f;
+
+  --primary: #6ea8fe;
+  --success: #57c98a;
+  --warning: #e0b356;
+  --error: #e07a7a;
+
+  --headline: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --body: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --label: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  --radius: 4px;
+  --radius-lg: 8px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 14px/1.55 var(--body);
+  display: flex;
+  min-height: 100vh;
+}
+
+h1, h2, h3 { font-family: var(--headline); margin: 0; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 15px; font-weight: 600; }
+h3 { font-size: 13px; font-weight: 600; }
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- sidebar */
+
+#sidebar {
+  width: 216px;
+  flex: 0 0 216px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 4px;
+}
+
+.brand { padding: 4px 8px 16px; }
+.brand .name { font-family: var(--headline); font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.brand .version { font-family: var(--label); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+
+#sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+
+#sidebar nav button {
+  all: unset;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-family: var(--label);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#sidebar nav button:hover { background: var(--panel-high); color: var(--text); }
+#sidebar nav button.active { background: rgba(110, 168, 254, 0.12); color: var(--primary); }
+
+.sidebar-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--border); }
+.sidebar-foot .who { font-size: 12px; color: var(--muted); word-break: break-all; }
+.sidebar-foot .note { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+/* -------------------------------------------------------------- main area */
+
+main { flex: 1; min-width: 0; padding: 24px 28px 64px; overflow-x: hidden; }
+
+.view-head { margin-bottom: 20px; }
+.view-head p { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+
+.view { display: grid; gap: 16px; }
+.hidden { display: none !important; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.panel > h2 { margin-bottom: 12px; }
+
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.panel-head h2 { margin: 0; }
+
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+
+/* ------------------------------------------------------------- stat tiles */
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+
+.tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.tile .label {
+  font-family: var(--label);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tile .value { font-family: var(--headline); font-size: 30px; font-weight: 600; line-height: 1.15; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.tile.attention { border-color: rgba(224, 179, 86, 0.4); }
+.tile.attention .value { color: var(--warning); }
+
+/* ----------------------------------------------------------------- tables */
+
+.scroll-x { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+th {
+  text-align: left;
+  font-family: var(--label);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.num, th.num { text-align: right; padding-right: 16px; font-variant-numeric: tabular-nums; }
+td.flag { color: var(--warning); }
+
+/* ------------------------------------------------------------------ pills */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--label);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pill-completed, .pill-accepted, .pill-succeeded { background: rgba(87, 201, 138, 0.12); color: var(--success); }
+.pill-processing, .pill-running, .pill-queued, .pill-pending { background: rgba(110, 168, 254, 0.12); color: var(--primary); }
+.pill-needs_review, .pill-degraded, .pill-verified { background: rgba(224, 179, 86, 0.12); color: var(--warning); }
+.pill-failed, .pill-rejected { background: rgba(224, 122, 122, 0.12); color: var(--error); }
+.pill-skipped { background: rgba(113, 117, 127, 0.15); color: var(--dim); }
+
+/* ------------------------------------------------------------------ chips */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-family: var(--label);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip-match { border-color: rgba(110, 168, 254, 0.5); color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* An evidence tag names where a value came from. `inferred` is deliberately weaker: those are the
+   values a reviewer should question first. */
+.evidence {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.evidence-inferred { border-style: dashed; color: var(--dim); background: rgba(34, 38, 46, 0.4); }
+
+/* --------------------------------------------------------------- evidence */
+
+.snippet {
+  border-left: 2px solid var(--primary);
+  padding: 2px 0 2px 10px;
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-line { font-family: var(--label); font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
+
+.result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.result-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.result-head strong { font-family: var(--headline); font-size: 14px; }
+.score { font-family: var(--label); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+
+/* --------------------------------------------------------------- timeline */
+
+.timeline { display: grid; gap: 10px; }
+
+.timeline-row { display: grid; grid-template-columns: 56px 1fr; gap: 12px; align-items: start; }
+.timeline-row .at { font-family: var(--mono); font-size: 12px; color: var(--primary); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.timeline-row .what { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ------------------------------------------------------- key/value blocks */
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 13px; }
+.kv dt { font-family: var(--label); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-all; }
+
+.confidence { text-align: right; }
+.confidence .value { font-family: var(--headline); font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.confidence .tier { font-family: var(--label); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; margin-top: 6px; }
+.tier-accepted { color: var(--success); }
+.tier-verified { color: var(--warning); }
+.tier-review { color: var(--warning); }
+.confidence .rule { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+/* --------------------------------------------------------- stage sequence */
+
+.stages { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+
+.stage-node {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  min-width: 120px;
+  text-align: center;
+}
+
+.stage-node .name { font-family: var(--label); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.stage-node .ms { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.stage-node.succeeded { border-color: rgba(87, 201, 138, 0.45); }
+.stage-node.succeeded .name { color: var(--success); }
+.stage-node.failed { border-color: rgba(224, 179, 86, 0.5); }
+.stage-node.failed .name { color: var(--warning); }
+.stage-node.skipped .name { color: var(--dim); }
+.stage-arrow { align-self: center; color: var(--dim); padding: 0 10px; }
+
+/* ------------------------------------------------------------------ forms */
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+.row + .row { margin-top: 10px; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span, label > span {
+  font-family: var(--label);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.grow { flex: 1 1 240px; }
+
+input, select, textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
+input::placeholder { color: var(--dim); }
+
+button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--primary);
+  color: #00284f;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+button:hover { filter: brightness(1.08); }
+button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+button.ghost:hover { background: var(--panel-high); filter: none; }
+button.small { padding: 5px 10px; font-size: 12px; }
+
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmented button { background: transparent; color: var(--muted); border: none; border-radius: 0; padding: 7px 14px; font-family: var(--label); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.segmented button.active { background: rgba(110, 168, 254, 0.14); color: var(--primary); }
+
+.checkbox { flex-direction: row; align-items: center; gap: 6px; }
+.checkbox input { width: auto; }
+
+/* ------------------------------------------------------------- misc + fx */
+
+.hint { color: var(--dim); font-size: 12px; margin: 10px 0 0; }
+.empty { color: var(--dim); font-size: 13px; }
+.banner { border: 1px solid var(--border); border-left: 2px solid var(--primary); border-radius: var(--radius); padding: 10px 14px; color: var(--muted); font-size: 13px; }
+.badge { font-family: var(--label); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+.day-head { font-family: var(--label); font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin: 4px 0; }
+.repeated { opacity: 0.55; }
+
+#toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: var(--panel-high);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  max-width: 380px;
+  font-size: 13px;
+  z-index: 40;
+}
+
+#toast.error { border-left-color: var(--error); }
+
+/* The Reel audit view opens over whatever surfaced the Reel, so provenance is always one click
+   away from a search result, a queue row, or a workout exercise. */
+#drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.7);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 30;
+}
+
+#drawer {
+  width: min(820px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  padding: 20px 24px 64px;
+}
+
+#drawer .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+
+@media (max-width: 860px) {
+  body { flex-direction: column; }
+  #sidebar { width: 100%; flex: none; flex-direction: column; border-right: none; border-bottom: 1px solid var(--border); }
+  #sidebar nav { flex-direction: row; flex-wrap: wrap; }
+  .sidebar-foot { margin-top: 12px; }
+  main { padding: 16px; }
+}
+
+/* Reels listed inside a collection card. */
+.nested { margin-top: 10px; padding-left: 12px; border-left: 1px solid var(--border); }
+.nested .result { background: var(--bg); }
+
+/* Destructive actions read as destructive on hover, but do not shout in the resting state -
+   these sit next to ordinary buttons and should not dominate the card. */
+button.danger { color: var(--error); border-color: rgba(224, 122, 122, 0.35); }
+button.danger:hover { background: rgba(224, 122, 122, 0.12); border-color: var(--error); }
