@@ -28,7 +28,8 @@ from app.api.knowledge import router as knowledge_router
 from app.api.knowledge import source_router as knowledge_source_router
 from app.api.media import router as media_router
 from app.api.auth import router as auth_router
-from app.db.database import Base, SessionLocal, engine
+from app.db.database import SessionLocal, engine
+from app.db.migrate import migrate_database
 import app.models  # noqa: F401 - ensures all ORM tables are registered
 from app.core.config import get_settings
 from app.core.logging import configure_logging, request_id_var
@@ -38,7 +39,8 @@ configure_logging(get_settings().log_level)
 logger = logging.getLogger(__name__)
 rate_limiter = RateLimiter(get_settings().rate_limit_per_minute)
 
-Base.metadata.create_all(bind=engine)
+if get_settings().auto_migrate:
+    migrate_database(engine)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):

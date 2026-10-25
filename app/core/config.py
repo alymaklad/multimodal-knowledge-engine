@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     """Runtime configuration loaded from environment variables or `.env`."""
 
     database_url: str = "sqlite:///./data/multimodal_knowledge.db"
+    # Apply pending migrations when the API starts. Turn off when several API processes share a
+    # database, and run `alembic upgrade head` once per release instead.
+    auto_migrate: bool = True
     processing_version: str = "v1"
     media_root: str = "./data/media"
     max_upload_bytes: int = 100 * 1024 * 1024

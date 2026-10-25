@@ -310,7 +310,20 @@ workout exercises and can filter by available equipment.
 
 ## Data model
 
-All tables are created at startup with `Base.metadata.create_all`. There are no migrations yet.
+The schema is managed by Alembic migrations in `app/db/migrations/versions`. The API applies any
+pending migration when it starts (`AUTO_MIGRATE=true`, the default). With several API processes on
+one database, turn that off and run `alembic upgrade head` once per release instead.
+
+To change the schema, edit the models, then draft and review a migration:
+
+```bash
+.venv/Scripts/python -m alembic revision --autogenerate -m "describe the change"
+```
+
+`tests/test_migrations.py` fails whenever the models and the migrations disagree, so a model change
+cannot land without its migration. A database created by `create_all` before migrations existed is
+adopted automatically: the known gaps are filled and it is stamped at the baseline revision. A
+database from the Instagram Reels era is refused with instructions instead.
 
 ```text
 users
@@ -594,6 +607,5 @@ Dockerfile, docker-compose.yml, run.bat, requirements*.txt, .env.example
 - **Local VLM confidence is optimistic.** Qwen2.5-VL-3B often reports 0.95–1.0 even on thin
   evidence, which can leave the review queue empty. Benchmark before trusting it.
 - **No Instagram download.** URL ingestion only records a reference; media has to be uploaded.
-- **No database migrations** (no Alembic). Schema changes need a fresh database.
 - **Single-process rate limiting**, and no Prometheus or OpenTelemetry export.
 - Pose estimation, which the architecture lists as optional, is not implemented.

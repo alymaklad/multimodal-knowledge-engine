@@ -13,6 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY alembic.ini ./
 COPY README.md IMPLEMENTATION_STATUS.md ./
 
 RUN useradd --create-home appuser && mkdir -p /app/data/media && chown -R appuser:appuser /app
