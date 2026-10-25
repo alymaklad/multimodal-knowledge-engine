@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,18 @@ class SearchRequest(BaseModel):
     mode: SearchMode = "lexical"
     author: str | None = Field(default=None, max_length=255)
     topic: str | None = Field(default=None, max_length=255)
+    # Restrict the search to some of the collection's sources. Every id must belong to the collection.
+    source_ids: list[int] | None = Field(default=None, min_length=1, max_length=500)
+
+
+class SearchPassage(BaseModel):
+    """One matching chunk: what it says and where in the source it is."""
+
+    chunk_key: str
+    content_type: str | None
+    text: str
+    locator: dict[str, Any] = {}
+    citation: str | None = None
 
 
 class SearchResult(BaseModel):
@@ -22,6 +34,7 @@ class SearchResult(BaseModel):
     origin_url: str | None
     score: float
     snippets: list[str]
+    passages: list[SearchPassage] = []
     match_type: SearchMode = "lexical"
     author: str | None = None
     topics: list[str] = []

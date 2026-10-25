@@ -25,6 +25,8 @@ class VectorPoint:
     vector: list[float]
     model: str
     content_type: str | None = None
+    locator: dict[str, Any] = field(default_factory=dict)
+    position: int = 0
     payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -35,6 +37,7 @@ class VectorMatch:
     content_type: str | None
     text: str
     score: float
+    locator: dict[str, Any] = field(default_factory=dict)
 
 
 class VectorStore(ABC):
@@ -48,7 +51,13 @@ class VectorStore(ABC):
 
     @abstractmethod
     def search(
-        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
+        self,
+        *,
+        source_ids: Collection[int],
+        vector: list[float],
+        limit: int,
+        content_type: str | None = None,
+        exclude_content_types: Collection[str] = (),
     ) -> list[VectorMatch]:
         """Nearest chunks among the given sources; a collection is searched by passing its members."""
 
@@ -73,6 +82,8 @@ class DatabaseVectorStore(VectorStore):
                     chunk_key=point.chunk_key,
                     content_type=point.content_type,
                     text=point.text,
+                    locator=point.locator,
+                    position=point.position,
                     vector=point.vector,
                     dimensions=len(point.vector),
                     model=point.model,
@@ -83,13 +94,21 @@ class DatabaseVectorStore(VectorStore):
         self._db.execute(delete(ContentEmbedding).where(ContentEmbedding.source_id == source_id))
 
     def search(
-        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
+        self,
+        *,
+        source_ids: Collection[int],
+        vector: list[float],
+        limit: int,
+        content_type: str | None = None,
+        exclude_content_types: Collection[str] = (),
     ) -> list[VectorMatch]:
         if not source_ids:
             return []
         statement = select(ContentEmbedding).where(ContentEmbedding.source_id.in_(list(source_ids)))
         if content_type is not None:
             statement = statement.where(ContentEmbedding.content_type == content_type)
+        if exclude_content_types:
+            statement = statement.where(ContentEmbedding.content_type.notin_(list(exclude_content_types)))
         matches = []
         stale = 0
         for row in self._db.scalars(statement):
@@ -107,6 +126,7 @@ class DatabaseVectorStore(VectorStore):
                     content_type=row.content_type,
                     text=row.text,
                     score=cosine_similarity(vector, stored),
+                    locator=dict(row.locator or {}),
                 )
             )
         if stale:
@@ -162,6 +182,7 @@ class QdrantVectorStore(VectorStore):
                         "chunk_key": point.chunk_key,
                         "content_type": point.content_type,
                         "text": point.text,
+                        "locator": point.locator,
                         **point.payload,
                     },
                 )
@@ -182,7 +203,13 @@ class QdrantVectorStore(VectorStore):
         )
 
     def search(  # pragma: no cover - requires a server
-        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
+        self,
+        *,
+        source_ids: Collection[int],
+        vector: list[float],
+        limit: int,
+        content_type: str | None = None,
+        exclude_content_types: Collection[str] = (),
     ) -> list[VectorMatch]:
         if not source_ids:
             return []
@@ -193,10 +220,15 @@ class QdrantVectorStore(VectorStore):
             conditions.append(
                 self._models.FieldCondition(key="content_type", match=self._models.MatchValue(value=content_type))
             )
+        excluded = (
+            [self._models.FieldCondition(key="content_type", match=self._models.MatchAny(any=list(exclude_content_types)))]
+            if exclude_content_types
+            else None
+        )
         response = self._client.query_points(
             collection_name=self._collection,
             query=vector,
-            query_filter=self._models.Filter(must=conditions),
+            query_filter=self._models.Filter(must=conditions, must_not=excluded),
             limit=limit,
             with_payload=True,
         )
@@ -207,6 +239,7 @@ class QdrantVectorStore(VectorStore):
                 content_type=point.payload.get("content_type"),
                 text=str(point.payload.get("text", "")),
                 score=float(point.score),
+                locator=dict(point.payload.get("locator") or {}),
             )
             for point in response.points
         ]

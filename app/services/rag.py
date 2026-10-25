@@ -16,11 +16,17 @@ def answer_collection_question(
     question: str,
     evidence_limit: int | None = None,
     content_type: str | None = None,
+    source_ids: list[int] | None = None,
     provider: AnswerProvider | None = None,
 ) -> AnswerResponse:
-    """Retrieve, then answer strictly from what was retrieved, returning the cited sources."""
+    """Retrieve, then answer strictly from what was retrieved, returning the cited passages.
+
+    Raises `SourceScopeError` when `source_ids` names a source outside the collection.
+    """
     limit = evidence_limit or get_settings().rag_evidence_limit
-    retrieved = retrieve_evidence(db, collection_id=collection_id, query=question, limit=limit, content_type=content_type)
+    retrieved = retrieve_evidence(
+        db, collection_id=collection_id, query=question, limit=limit, content_type=content_type, source_ids=source_ids
+    )
     chunks = [
         EvidenceChunk(
             source_id=item.source_id,
@@ -29,9 +35,12 @@ def answer_collection_question(
             content_type=item.content_type,
             text=item.text,
             score=item.score,
+            chunk_key=item.chunk_key,
+            citation=item.citation,
         )
         for item in retrieved
     ]
+    locators = {(item.source_id, item.chunk_key): item.locator for item in retrieved}
     grounded = (provider or get_answer_provider()).answer(question, chunks)
     cited = set(grounded.cited_source_ids)
     sources = [
@@ -42,6 +51,9 @@ def answer_collection_question(
             content_type=chunk.content_type,
             score=chunk.score,
             snippet=chunk.text[:300],
+            chunk_key=chunk.chunk_key,
+            locator=locators.get((chunk.source_id, chunk.chunk_key), {}),
+            citation=chunk.citation,
         )
         for chunk in chunks
         if not cited or chunk.source_id in cited

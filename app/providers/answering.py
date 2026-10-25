@@ -38,7 +38,8 @@ class ExtractiveAnswerProvider(AnswerProvider):
                 continue
             if chunk.source_id not in cited:
                 cited.append(chunk.source_id)
-            lines.append(f"- Source {chunk.source_id} ({chunk.title}): {sentence}")
+            where = f"{chunk.title}, {chunk.citation}" if chunk.citation else chunk.title
+            lines.append(f"- Source {chunk.source_id} ({where}): {sentence}")
             if len(lines) >= 5:
                 break
         if not lines:

@@ -12,7 +12,10 @@ the sources in a collection, with citations.
 > fetched by the worker. Each kind has a processor that splits it into segments with a locator (page,
 > section, or time range): PDFs (with OCR for scanned pages), Word documents, text and Markdown, web
 > pages, YouTube captions, images (OCR, plus a description with `VISION_PROVIDER=claude`), and audio
-> (with a `SPEECH_PROVIDER`). The sections below still describe the original video pipeline.
+> (with a `SPEECH_PROVIDER`). Segments are packed into overlapping chunks that keep their location,
+> lexical search is BM25 over those chunks, and search results and answers say where each passage
+> is ("p. 4", "12:30–13:45", "§ Setup"). Search and `/ask` accept `source_ids` to use only some of
+> a collection's sources. The sections below still describe the original video pipeline.
 
 The video pipeline turns saved short-form videos into a searchable,
 evidence-backed knowledge base. Each video goes through FFmpeg preparation, then speech

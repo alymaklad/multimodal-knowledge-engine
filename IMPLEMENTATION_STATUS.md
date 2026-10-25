@@ -1161,3 +1161,36 @@ upload that is segmented, indexed, found by hybrid search, and cited by `/ask`. 
 example.com through the web processor produced clean body text. Not verified against live models:
 OCR of scanned pages (tests use a fake OCR provider), Whisper on real audio, and Claude image
 descriptions.
+
+## Completed — phase 4: located chunks and chunk-level retrieval (2026-10-25)
+
+- **Chunking** (`app/services/chunking.py`). Every source, video included, is reduced to ordered,
+  located passages: processor segments, or a video's timed transcript lines, on-screen text (a
+  caption visible across frames collapses into one timed span), and visual description. Passages
+  are packed into chunks of at most `CHUNK_MAX_CHARACTERS`, each starting with the last
+  `CHUNK_OVERLAP_CHARACTERS` of the previous one; an overlong passage becomes overlapping windows
+  that end at word boundaries. Packing never mixes streams (transcript and OCR stay apart) or
+  headings, but does span pages and time windows, and the merged locator records the span.
+  Extracted records stay one chunk each. A summary chunk is still stored for near-duplicate
+  detection but is excluded from retrieval, since it only restates the other chunks.
+- **Stored locators.** `content_embeddings` gains `locator` and `position`; the Qdrant payload
+  carries the locator too. `describe_locator` turns one into a label: "p. 4", "pp. 3–4",
+  "12:30–13:45", "§ Guide > Install".
+- **Retrieval** (`app/services/retrieval.py`) ranks stored chunks in every mode. Lexical search is
+  BM25 over the chunks of the sources in scope (`minimum_score` remains a count of query-term
+  occurrences per source); dense search is the vector store; hybrid fuses the two per chunk with
+  reciprocal rank fusion. Search results group chunks into sources and carry up to three
+  `passages`, each with `locator` and `citation`. Evidence for `/ask` is now hybrid rather than
+  dense-only, reranked at chunk level, and each answer source carries `chunk_key`, `locator`, and
+  `citation`; both answer providers put the citation next to the source in their output.
+- **Source subsets.** `/api/search` and `/ask` take `source_ids`; ids outside the collection are a
+  404 that lists them.
+
+Behaviour change: retrieval reads only indexed chunks, so the lexical fallback over raw evidence for
+unindexed sources is gone. Every pipeline indexes on completion, and `POST /api/collections/{id}/index`
+backfills. **Existing databases need the two new `content_embeddings` columns**: `create_all` does
+not add columns, so a database created before this phase must be recreated (or the columns added by
+hand) and reindexed. This is the point where migrations (Alembic) stop being optional.
+
+Verified: 272 tests, including chunk packing, overlap, window splitting, video timestamps, locator
+labels, BM25 ordering, page citations in search and answers, and scoped questions.

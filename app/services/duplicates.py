@@ -6,11 +6,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.embedding import ContentEmbedding
 from app.models.source import Source
+from app.services.chunking import SUMMARY_CHUNK_KEY
 from app.services.membership import collection_source_ids
 from app.providers.embeddings import cosine_similarity
 from app.schemas.embedding import DuplicatePair
 
-SUMMARY_CHUNK_KEY = "summary"
 
 
 def find_near_duplicates(db: Session, *, collection_id: int, threshold: float | None = None) -> list[DuplicatePair]:

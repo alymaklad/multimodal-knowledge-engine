@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     max_document_pages: int = 1000
     # Transcripts (YouTube, audio) are grouped into windows of about this many seconds.
     transcript_window_seconds: float = 60.0
+    # Retrieval chunks: consecutive segments are packed up to this size, and each chunk repeats the
+    # end of the previous one so a passage cut at a boundary is still found whole.
+    chunk_max_characters: int = 1500
+    chunk_overlap_characters: int = 200
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     frame_sample_fps: float = 1.0

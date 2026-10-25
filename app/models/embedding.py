@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -17,6 +18,9 @@ class ContentEmbedding(Base):
     chunk_key: Mapped[str] = mapped_column(String(128))
     content_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     text: Mapped[str] = mapped_column(Text)
+    # Where in the source the chunk comes from (see SourceSegment), and its order within the source.
+    locator: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    position: Mapped[int] = mapped_column(Integer, default=0)
     vector: Mapped[list[float]] = mapped_column(JSON)
     dimensions: Mapped[int] = mapped_column(Integer)
     model: Mapped[str] = mapped_column(String(128))

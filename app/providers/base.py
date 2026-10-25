@@ -50,6 +50,9 @@ class EvidenceChunk:
     content_type: str | None
     text: str
     score: float
+    chunk_key: str = ""
+    # A readable location within the source, such as "p. 4" or "12:30-13:45", when one is known.
+    citation: str | None = None
 
 
 @dataclass(frozen=True)

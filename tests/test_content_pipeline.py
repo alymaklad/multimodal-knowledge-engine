@@ -57,7 +57,8 @@ def test_a_markdown_upload_is_segmented_indexed_and_answerable() -> None:
         segments = db.query(SourceSegment).filter(SourceSegment.source_id == source_id).order_by(SourceSegment.sequence).all()
         assert [segment.locator.get("section") for segment in segments] == ["Retrieval", "Serving"]
         keys = {row.chunk_key for row in db.query(ContentEmbedding).filter(ContentEmbedding.source_id == source_id)}
-        assert {"segment:1", "segment:2", "summary"} <= keys
+        # Two sections never share a chunk, so each heading's text is a chunk of its own.
+        assert keys == {"text:1", "text:2", "summary"}
         metric = db.query(StageMetric).filter(StageMetric.source_id == source_id).one()
         assert metric.stage == CONTENT_EXTRACTION and metric.status is StageStatus.succeeded
         assert metric.items_processed == 2

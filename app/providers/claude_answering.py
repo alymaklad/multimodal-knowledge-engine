@@ -83,6 +83,7 @@ class ClaudeAnswerProvider(AnswerProvider):
 def _answer_prompt(question: str, evidence: list[EvidenceChunk]) -> str:
     blocks = [
         f"[Source {chunk.source_id}] {chunk.title}"
+        + (f", {chunk.citation}" if chunk.citation else "")
         + (f" ({chunk.origin_url})" if chunk.origin_url else "")
         + f" evidence type: {chunk.content_type or 'mixed'}\n{chunk.text}"
         for chunk in evidence

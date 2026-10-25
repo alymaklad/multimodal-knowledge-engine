@@ -104,8 +104,14 @@ def capabilities() -> dict[str, object]:
         "provider_contracts": ["speech", "ocr", "vision", "extraction", "embedding", "answering"],
         "retrieval": {
             "modes": ["lexical", "semantic", "hybrid"],
-            "filters": ["content_type", "author", "topic", "minimum_score"],
-            "fusion": "reciprocal_rank",
+            "filters": ["content_type", "author", "topic", "minimum_score", "source_ids"],
+            "lexical": "bm25_over_chunks",
+            "fusion": "reciprocal_rank_per_chunk",
+            "chunking": {
+                "max_characters": settings.chunk_max_characters,
+                "overlap_characters": settings.chunk_overlap_characters,
+                "locators": ["page", "section", "paragraph", "start", "end", "region"],
+            },
             "reranker": settings.reranker,
             "embedding_provider": settings.embedding_provider,
             "embedding_model": settings.embedding_model if settings.embedding_provider != "hashing" else "local-hashing-v1",

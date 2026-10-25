@@ -10,6 +10,7 @@ from app.services.authorization import get_owned_collection, get_owned_source
 from app.services.duplicates import find_near_duplicates
 from app.services.embeddings import index_collection, index_source
 from app.services.rag import answer_collection_question
+from app.services.retrieval import SourceScopeError
 
 router = APIRouter(prefix="/api/collections", tags=["knowledge"])
 
@@ -34,13 +35,19 @@ def ask_collection(
 ) -> AnswerResponse:
     if get_owned_collection(db, collection_id, user_id) is None:
         raise HTTPException(status_code=404, detail="Collection not found")
-    return answer_collection_question(
-        db,
-        collection_id=collection_id,
-        question=payload.question,
-        evidence_limit=payload.evidence_limit,
-        content_type=payload.content_type,
-    )
+    try:
+        return answer_collection_question(
+            db,
+            collection_id=collection_id,
+            question=payload.question,
+            evidence_limit=payload.evidence_limit,
+            content_type=payload.content_type,
+            source_ids=payload.source_ids,
+        )
+    except SourceScopeError as error:
+        raise HTTPException(
+            status_code=404, detail={"message": "Sources not in this collection", "source_ids": error.source_ids}
+        ) from error
 
 
 @router.get("/{collection_id}/duplicates", response_model=list[DuplicatePair])
