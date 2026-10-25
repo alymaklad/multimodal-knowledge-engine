@@ -20,14 +20,14 @@ def delete_source_and_local_media(db: Session, source: Source) -> None:
         path = Path(path_string).resolve()
         if path.is_relative_to(media_root):
             path.unlink(missing_ok=True)
-    prepared_dir = media_root / "prepared" / str(source.id)
-    if prepared_dir.is_dir():
-        for child in sorted(prepared_dir.rglob("*"), reverse=True):
-            if child.is_file():
-                child.unlink(missing_ok=True)
-            elif child.is_dir():
-                child.rmdir()
-        prepared_dir.rmdir()
+    for working_dir in (media_root / "prepared" / str(source.id), media_root / "fetched" / str(source.id)):
+        if working_dir.is_dir():
+            for child in sorted(working_dir.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    child.rmdir()
+            working_dir.rmdir()
     _remove_stored_objects(source)
     db.delete(source)
     db.commit()

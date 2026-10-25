@@ -6,9 +6,11 @@ the sources in a collection, with citations.
 
 > **Migration in progress.** The project started as an engine for Instagram Reels and is being
 > generalised to any source type. Sources now live in a per-user library and a collection is a
-> selection over it (`POST /api/sources/url`, `POST /api/sources/upload`,
-> `POST /api/collections/{id}/sources`). Video is the only source type processed so far, and the
-> sections below still describe the original video pipeline.
+> selection over it (`POST /api/sources/url`, `POST /api/sources/upload`, `POST /api/sources/text`,
+> `POST /api/collections/{id}/sources`). Uploads of documents (PDF, DOCX, TXT, Markdown), images,
+> audio, and video are accepted and verified by content; web pages and YouTube transcripts are
+> fetched by the worker. Video is the only kind analysed so far: the others are stored and wait for
+> their processor. The sections below still describe the original video pipeline.
 
 The video pipeline turns saved short-form videos into a searchable,
 evidence-backed knowledge base. Each video goes through FFmpeg preparation, then speech

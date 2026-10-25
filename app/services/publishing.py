@@ -1,4 +1,4 @@
-"""Publish a source's media to durable object storage after preparation."""
+"""Publish a source's original file and derived media to durable object storage."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.source import Source
+from app.models.source import Source, SourceKind
 from app.models.stored_object import StoredObject, StoredObjectKind
 from app.services.object_store import ObjectStore, get_object_store, object_key
 
@@ -22,7 +22,7 @@ class PublishResult:
 
 
 def publish_source_media(db: Session, source: Source, *, store: ObjectStore | None = None) -> PublishResult:
-    """Copy the source video, audio, and frames into the object store under the section 8 layout.
+    """Copy the original file, plus any extracted audio and frames, into the object store.
 
     Republishing replaces the source's prior object records, so a reprocessed source never accumulates
     entries pointing at frames a newer run has already overwritten.
@@ -34,9 +34,14 @@ def publish_source_media(db: Session, source: Source, *, store: ObjectStore | No
     planned: list[tuple[StoredObjectKind, Path, str, int | None]] = []
     if source.media_path:
         media_file = Path(source.media_path)
-        planned.append(
-            (StoredObjectKind.video, media_file, object_key(user_id, source.id, f"video{media_file.suffix or '.mp4'}"), None)
-        )
+        if source.kind is SourceKind.video:
+            planned.append(
+                (StoredObjectKind.video, media_file, object_key(user_id, source.id, f"video{media_file.suffix or '.mp4'}"), None)
+            )
+        else:
+            planned.append(
+                (StoredObjectKind.original, media_file, object_key(user_id, source.id, f"original{media_file.suffix}"), None)
+            )
     for asset in assets:
         path = Path(asset.path)
         if asset.kind == MediaAssetKind.audio:

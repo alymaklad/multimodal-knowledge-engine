@@ -1,17 +1,17 @@
 from app.db.database import SessionLocal
 from app.workers.celery_app import celery_app
-from app.workers.pipeline import prepare_source_media
+from app.workers.pipeline import start_source_job
 from app.workers.pipeline import analyze_source
 from app.providers.local import EvidenceVisionProvider
 from app.providers.factory import get_extraction_provider, get_ocr_provider, get_vision_provider
 from app.providers.speech import get_speech_provider
 
 
-@celery_app.task(name="sources.prepare_media", autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
-def prepare_media_task(job_id: int) -> dict[str, str | int]:
-    """Celery entry point for the first executable pipeline stage."""
+@celery_app.task(name="sources.start", autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def start_source_task(job_id: int) -> dict[str, str | int]:
+    """Celery entry point for the first stage of any source: fetch, prepare, or hold by kind."""
     with SessionLocal() as db:
-        job = prepare_source_media(db, job_id)
+        job = start_source_job(db, job_id)
         if job.status.value == "queued" and job.current_stage == "ocr_and_transcription":
             analyze_media_task.delay(job.id)
         return {"job_id": job.id, "status": job.status.value, "stage": job.current_stage}

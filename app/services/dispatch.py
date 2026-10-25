@@ -1,4 +1,4 @@
-"""Handing a prepared job to the Celery worker.
+"""Handing a new job to the worker.
 
 The HTTP request must never block on an unreachable broker. Celery's own retry settings did not
 bound this reliably — with Redis stopped, `apply_async` still hung well past a minute — so the
@@ -13,7 +13,7 @@ import socket
 from urllib.parse import urlparse
 
 from app.core.config import get_settings
-from app.workers.tasks import prepare_media_task
+from app.workers.tasks import start_source_task
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class JobDispatchError(RuntimeError):
     pass
 
 
-def dispatch_media_preparation(job_id: int) -> str:
+def dispatch_source_job(job_id: int) -> str:
     if get_settings().task_runner.lower() in {"local", "thread", "inprocess"}:
         from app.services.local_runner import submit
 
@@ -34,10 +34,10 @@ def dispatch_media_preparation(job_id: int) -> str:
     try:
         # retry=False so a broker that drops out between the probe and the publish surfaces here
         # rather than being retried behind the scenes while the request waits.
-        result = prepare_media_task.apply_async(args=[job_id], retry=False)
+        result = start_source_task.apply_async(args=[job_id], retry=False)
     except Exception as error:
         raise JobDispatchError(
-            f"Unable to enqueue the media-preparation job ({type(error).__name__})"
+            f"Unable to enqueue the processing job ({type(error).__name__})"
         ) from error
     return result.id
 

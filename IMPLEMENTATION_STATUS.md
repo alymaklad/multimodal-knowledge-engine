@@ -1091,3 +1091,40 @@ Not yet done: only video uploads are accepted and processed; URL sources are rec
 fetched. The old single-page client under `app/web/static` still calls the Reel API and is stale.
 The default SQLite file moved to `data/multimodal_knowledge.db`, because `create_all` cannot migrate
 the old Reel-era tables.
+
+## Completed — phase 2: ingestion for every source type (2026-10-25)
+
+Every source kind can now enter the library and end up with its raw content on disk. Analysing that
+content is phase 3.
+
+- **Uploads of every type.** `POST /api/sources/upload` accepts PDF, DOCX, TXT, Markdown, PNG, JPEG,
+  WebP, MP3, WAV, M4A, Ogg, FLAC, MP4, MOV, and WebM. The extension decides the kind (the declared
+  content type is only a fallback for a file without one), and the first bytes must match it, so a
+  renamed file is refused with 415 before the rest is written. Text must be UTF-8 without NUL bytes,
+  checked while streaming; a DOCX must contain a document body. The stored MIME type is the verified
+  one. Rejected uploads leave no file behind.
+- **Pasted text.** `POST /api/sources/text` stores the text as a file, so it is processed like any
+  upload. Identical text is a duplicate; `MAX_TEXT_CHARACTERS` bounds a paste.
+- **Link normalisation** (`app/services/links.py`). Every YouTube form (`youtu.be`, `/shorts/`,
+  `/embed/`, `watch?v=…&t=…`) reduces to one canonical link, so it deduplicates; channel and playlist
+  links are refused. Web links lose the fragment and default port. Credentials in a link, non-HTTP
+  schemes, and obviously private hosts are refused at ingestion with a 422 that says why.
+- **Fetching in the worker** (`app/services/fetching.py`). Web pages are fetched with redirects
+  followed one hop at a time; every hop is re-checked, and every address a host resolves to must be
+  public unless `FETCH_ALLOW_PRIVATE_HOSTS` is set. Responses are size-capped while streaming and
+  limited to HTML, plain text, Markdown, and PDF. The page title becomes the source title unless the
+  user typed one. YouTube sources fetch the caption track (written captions in a preferred language
+  first, then generated ones, then any language) through the optional `youtube-transcript-api`, plus
+  the title and channel from oEmbed.
+- **Routing by kind.** A single first stage, `start_source_job` (Celery task `sources.start`), sends
+  links to fetching, video to media preparation, and every other kind to `awaiting_processor`. Links
+  can now be dispatched without a file. The local runner resumes links that were never fetched.
+- **Originals are published** to the object store for non-video sources (`StoredObjectKind.original`).
+  A fetched HTML snapshot is served only as a sandboxed download (`Content-Security-Policy: sandbox`,
+  `Content-Disposition: attachment`), since it is someone else's markup on this origin.
+
+Limits, stated plainly: the address check and the connection are separate DNS lookups, so a
+rebinding DNS server could still steer a fetch inward; pinning the connection to the checked
+address would close that. `youtube-transcript-api` is unofficial and can break when YouTube changes,
+and YouTube may refuse requests from cloud IP ranges. Neither fetcher has been run against the live
+network in this phase; the tests use mock transports and fake transcript APIs.

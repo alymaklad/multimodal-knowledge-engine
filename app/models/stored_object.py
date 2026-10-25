@@ -9,6 +9,8 @@ from app.db.database import Base
 
 class StoredObjectKind(str, enum.Enum):
     video = "video"
+    # The uploaded or fetched file of any non-video source: a PDF, a page snapshot, an image.
+    original = "original"
     audio = "audio"
     frame = "frame"
     thumbnail = "thumbnail"

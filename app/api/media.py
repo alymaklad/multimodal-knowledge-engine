@@ -67,7 +67,13 @@ def download_source_media(
         stream = get_object_store().open(stored.storage_key)
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=404, detail="Stored object is no longer available") from error
-    return StreamingResponse(stream, media_type=stored.content_type)
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if stored.content_type.startswith("text/html"):
+        # A fetched page is someone else's markup. Rendered on this origin its scripts would run with
+        # the user's session, so it is only ever handed over as a sandboxed download.
+        headers["Content-Disposition"] = "attachment"
+        headers["Content-Security-Policy"] = "sandbox"
+    return StreamingResponse(stream, media_type=stored.content_type, headers=headers)
 
 
 @router.post("/{source_id}/publish", response_model=PublishResponse)

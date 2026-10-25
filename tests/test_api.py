@@ -2,6 +2,9 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
+# Enough of an MP4 header for the upload's content check; the pipeline never opens it in these tests.
+MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 16
+
 
 client = TestClient(app)
 
@@ -38,9 +41,11 @@ def test_collection_and_source_ingestion_flow(monkeypatch) -> None:
     assert events.status_code == 200
     assert events.json()[0]["event_type"] == "queued"
 
-    monkeypatch.setattr("app.api.jobs.dispatch_media_preparation", lambda _job_id: "task-123")
+    # A link has no file yet, but it can still be dispatched: the worker fetches it.
+    monkeypatch.setattr("app.api.jobs.dispatch_source_job", lambda _job_id: "task-123")
     dispatch = client.post(f"/api/jobs/{job.json()['id']}/dispatch")
-    assert dispatch.status_code == 422
+    assert dispatch.status_code == 202
+    assert dispatch.json()["task_id"] == "task-123"
 
     source = client.get(f"/api/sources/{created.json()['source_id']}")
     assert source.status_code == 200
@@ -52,7 +57,7 @@ def test_collection_and_source_ingestion_flow(monkeypatch) -> None:
 
 
 def test_url_kind_is_detected_from_the_host() -> None:
-    youtube = _add_url("https://www.youtube.com/watch?v=kind-detection")
+    youtube = _add_url("https://www.youtube.com/watch?v=kInDdEtEcT1")
     article = _add_url("https://example.com/kind-detection")
     assert client.get(f"/api/sources/{youtube}").json()["kind"] == "youtube"
     assert client.get(f"/api/sources/{article}").json()["kind"] == "web"
@@ -182,7 +187,7 @@ def test_uploaded_video_creates_a_queued_source() -> None:
     response = client.post(
         "/api/sources/upload",
         data={"collection_id": str(collection["id"])},
-        files={"media": ("demo.mp4", b"not-a-real-video-yet", "video/mp4")},
+        files={"media": ("demo.mp4", MP4 + b"demo", "video/mp4")},
     )
     assert response.status_code == 202
     source = client.get(f"/api/sources/{response.json()['source_id']}").json()
@@ -195,7 +200,7 @@ def test_uploaded_video_creates_a_queued_source() -> None:
 
     duplicate = client.post(
         "/api/sources/upload",
-        files={"media": ("renamed.mp4", b"not-a-real-video-yet", "video/mp4")},
+        files={"media": ("renamed.mp4", MP4 + b"demo", "video/mp4")},
     )
     assert duplicate.status_code == 409
 
@@ -207,7 +212,7 @@ def test_uploaded_video_creates_a_queued_source() -> None:
 
 def test_upload_without_a_collection_lands_in_the_library_only() -> None:
     response = client.post(
-        "/api/sources/upload", files={"media": ("library-only.mp4", b"library-only-bytes", "video/mp4")}
+        "/api/sources/upload", files={"media": ("library-only.mp4", MP4 + b"library-only", "video/mp4")}
     )
     assert response.status_code == 202
     library = {item["id"] for item in client.get("/api/sources", params={"kind": "video"}).json()}

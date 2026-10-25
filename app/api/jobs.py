@@ -12,7 +12,8 @@ from app.schemas.job import JobRead
 from app.schemas.job_event import JobEventRead
 from app.schemas.dispatch import TaskDispatchRead
 from app.workers.celery_app import celery_app
-from app.services.dispatch import JobDispatchError, dispatch_media_preparation
+from app.services.dispatch import JobDispatchError, dispatch_source_job
+from app.services.links import FETCHED_KINDS
 from app.services.authorization import get_owned_job
 from app.services.reprocessing import reset_source_for_reprocessing
 from app.services.jobs import record_job_event
@@ -73,17 +74,17 @@ def dispatch_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Processing job not found")
     if job.current_stage != "ingestion":
-        raise HTTPException(status_code=409, detail="Only new ingestion jobs can be dispatched for media preparation")
-    if not job.source.media_path:
-        raise HTTPException(status_code=422, detail="A local media upload is required before this job can be dispatched")
+        raise HTTPException(status_code=409, detail="Only new ingestion jobs can be dispatched")
+    if not job.source.media_path and job.source.kind not in FETCHED_KINDS:
+        raise HTTPException(status_code=422, detail="An uploaded file is required before this job can be dispatched")
     try:
-        task_id = dispatch_media_preparation(job.id)
+        task_id = dispatch_source_job(job.id)
     except JobDispatchError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     record_job_event(db, job_id=job.id, stage="ingestion", event_type="dispatched", message=f"Celery task {task_id}")
-    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.prepare_media"))
+    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.start"))
     db.commit()
-    return {"job_id": job.id, "task_id": task_id, "message": "Media preparation queued"}
+    return {"job_id": job.id, "task_id": task_id, "message": "Processing queued"}
 
 
 @router.get("/{job_id}/dispatches", response_model=list[TaskDispatchRead])
@@ -118,10 +119,10 @@ def retry_job(job_id: int, db: Session = Depends(get_db), user_id: str = Depends
         raise HTTPException(status_code=409, detail="Only failed or review-required jobs can be retried")
     reset_source_for_reprocessing(db, job.source)
     try:
-        task_id = dispatch_media_preparation(job.id)
+        task_id = dispatch_source_job(job.id)
     except JobDispatchError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     record_job_event(db, job_id=job.id, stage="ingestion", event_type="dispatched", message=f"Retry task {task_id}")
-    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.prepare_media"))
+    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.start"))
     db.commit()
     return {"job_id": job.id, "task_id": task_id, "message": "Job requeued"}

@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
 from app.core.config import get_settings
+from app.services.fetching import youtube_transcripts_available
+from app.services.source_types import describe_accepted_types
 from app.services.video import media_tools_status
 
 router = APIRouter(prefix="/api", tags=["metadata"])
@@ -15,6 +17,9 @@ def capabilities() -> dict[str, object]:
     extraction_is_local = settings.extraction_provider.lower() in {"rule_based", "rules", "local"}
     limitations = []
     tools = media_tools_status()
+    if not youtube_transcripts_available():
+        limitations.append("youtube-transcript-api is not installed; YouTube links cannot be fetched")
+    limitations.append("only video sources are analysed so far; other kinds are stored and wait for their processor")
     for tool, path in tools.items():
         if path is None:
             limitations.append(
@@ -42,7 +47,13 @@ def capabilities() -> dict[str, object]:
     if settings.vector_store.lower() == "database":
         limitations.append("exact brute-force vector scan; move to Qdrant for large collections")
     return {
-        "ingestion": ["web_url", "youtube_url", "local_video_upload"],
+        "ingestion": ["web_url", "youtube_url", "pasted_text", "local_video_upload", "file_upload"],
+        "upload_types": describe_accepted_types(),
+        "link_fetching": {
+            "private_hosts_allowed": settings.fetch_allow_private_hosts,
+            "max_bytes": settings.max_fetch_bytes,
+            "youtube_transcripts": youtube_transcripts_available(),
+        },
         "media_preparation": {
             "features": ["ffmpeg_audio", "frame_sampling"],
             # Resolved paths, not a claim: an upload fails deep in the pipeline if these are

@@ -4,17 +4,25 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.database import get_db
 from app.core.security import get_current_user_id
 from app.models.collection import Collection, CollectionSource
 from app.models.source import Source, SourceKind, SourceStatus
-from app.schemas.source import SourceIngestionResponse, SourceMetadataUpdate, SourceRead, SourceUrlCreate
+from app.schemas.source import (
+    SourceIngestionResponse,
+    SourceMetadataUpdate,
+    SourceRead,
+    SourceTextCreate,
+    SourceUrlCreate,
+)
 from app.schemas.review import ReviewDecision
 from app.models.job import JobStatus
 from app.services.jobs import record_job_event
 from app.services.ingestion import DuplicateSourceError, create_uploaded_source, create_url_source
 from app.services.reprocessing import reset_source_for_reprocessing
-from app.services.storage import save_uploaded_media
+from app.services.links import InvalidLinkError
+from app.services.storage import save_pasted_text, save_uploaded_media
 from app.services.authorization import get_owned_collection, get_owned_source
 from app.services.lifecycle import delete_source_and_local_media
 
@@ -39,6 +47,8 @@ def add_url_source(
         source = create_url_source(
             db, user_id=user_id, url=str(payload.url), title=payload.title, collection=collection
         )
+    except InvalidLinkError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except DuplicateSourceError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -61,9 +71,10 @@ async def upload_source(
             db,
             user_id=user_id,
             upload=upload,
-            kind=SourceKind.video,
+            kind=upload.file_type.kind,
             original_filename=media.filename,
-            mime_type=media.content_type,
+            # The verified type, not whatever the client declared.
+            mime_type=upload.file_type.mime_type,
             collection=collection,
         )
     except DuplicateSourceError as error:
@@ -76,6 +87,40 @@ async def upload_source(
         Path(upload.path).unlink(missing_ok=True)
         raise
     return SourceIngestionResponse(source_id=source.id, status=source.status, message="Uploaded source queued for processing")
+
+
+@router.post("/text", response_model=SourceIngestionResponse, status_code=status.HTTP_202_ACCEPTED)
+def add_text_source(
+    payload: SourceTextCreate, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+) -> SourceIngestionResponse:
+    """Add pasted text, such as notes or a copied article, as a source of its own."""
+    limit = get_settings().max_text_characters
+    if len(payload.text) > limit:
+        raise HTTPException(status_code=413, detail=f"Text exceeds the {limit} character limit")
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="The text is empty")
+    collection = _optional_collection(db, payload.collection_id, user_id)
+    saved = save_pasted_text(payload.text)
+    try:
+        source = create_uploaded_source(
+            db,
+            user_id=user_id,
+            upload=saved,
+            kind=SourceKind.text,
+            title=payload.title.strip(),
+            mime_type="text/plain",
+            collection=collection,
+        )
+    except DuplicateSourceError as error:
+        Path(saved.path).unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "This text is already in your library", "source_id": error.source.id},
+        ) from error
+    except Exception:
+        Path(saved.path).unlink(missing_ok=True)
+        raise
+    return SourceIngestionResponse(source_id=source.id, status=source.status, message="Text source queued for processing")
 
 
 @router.get("", response_model=list[SourceRead])

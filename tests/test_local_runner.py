@@ -12,7 +12,7 @@ from app.models.collection import Collection
 from app.models.job import JobStatus, ProcessingJob
 from app.models.source import Source, SourceKind, SourceStatus
 from app.services import local_runner
-from app.services.dispatch import JobDispatchError, dispatch_media_preparation
+from app.services.dispatch import JobDispatchError, dispatch_source_job
 
 client = TestClient(app)
 
@@ -46,7 +46,7 @@ def test_dispatch_routes_to_the_local_runner(monkeypatch) -> None:
     submitted: list[int] = []
     monkeypatch.setattr(local_runner, "submit", lambda job_id: submitted.append(job_id) or "local-test")
     try:
-        assert dispatch_media_preparation(4242) == "local-test"
+        assert dispatch_source_job(4242) == "local-test"
         assert submitted == [4242]
     finally:
         get_settings.cache_clear()
@@ -59,7 +59,7 @@ def test_dispatch_still_uses_celery_by_default(monkeypatch) -> None:
     get_settings.cache_clear()
     try:
         with pytest.raises(JobDispatchError, match="not reachable"):
-            dispatch_media_preparation(1)
+            dispatch_source_job(1)
     finally:
         get_settings.cache_clear()
 

@@ -13,6 +13,13 @@ class SourceUrlCreate(BaseModel):
     collection_id: int | None = Field(default=None, gt=0)
 
 
+class SourceTextCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    # The upper bound is MAX_TEXT_CHARACTERS, checked by the endpoint so it stays configurable.
+    text: str = Field(min_length=1)
+    collection_id: int | None = Field(default=None, gt=0)
+
+
 class SourceRead(BaseModel):
     id: int
     user_id: str

@@ -27,6 +27,7 @@ import uuid
 
 from app.db.database import SessionLocal
 from app.models.job import JobStatus, ProcessingJob
+from app.services.links import FETCHED_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def _process(job_id: int) -> None:
     )
     from app.providers.local import EvidenceVisionProvider
     from app.providers.speech import get_speech_provider
-    from app.workers.pipeline import analyze_source, prepare_source_media
+    from app.workers.pipeline import analyze_source, start_source_job
 
     with SessionLocal() as db:
         job = db.get(ProcessingJob, job_id)
@@ -87,8 +88,9 @@ def _process(job_id: int) -> None:
             logger.warning("Job vanished before the runner reached it", extra={"job_id": job_id})
             return
 
-        if job.current_stage == "ingestion":
-            job = prepare_source_media(db, job_id)
+        # `fetching` is included so a link whose fetch was cut off by a restart is fetched again.
+        if job.current_stage in ("ingestion", "fetching"):
+            job = start_source_job(db, job_id)
             if job.status is JobStatus.failed:
                 return
 
@@ -120,15 +122,16 @@ def resume_unfinished() -> int:
         # nothing that will ever collect it, so the source spins in the interface forever. Observed,
         # not hypothetical. Re-running the stage is safe: it is retry-safe by design and replaces
         # its own prior output.
-        stages = ("ingestion", "ocr_and_transcription", "multimodal_analysis")
+        stages = ("ingestion", "fetching", "ocr_and_transcription", "multimodal_analysis")
         jobs = [
             job.id
             for job in db.query(ProcessingJob)
             .filter(ProcessingJob.status.in_([JobStatus.queued, JobStatus.running]))
             .filter(ProcessingJob.current_stage.in_(stages))
             .all()
-            # A URL-only source has no media and can never progress; queueing it would spin forever.
-            if job.source is not None and job.source.media_path
+            # A source with neither a file nor a fetchable link can never progress; queueing it would
+            # spin forever.
+            if job.source is not None and (job.source.media_path or job.source.kind in FETCHED_KINDS)
         ]
     for job_id in jobs:
         submit(job_id)

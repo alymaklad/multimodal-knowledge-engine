@@ -7,6 +7,9 @@ faster-whisper>=1.0,<2.0
 # EMBEDDING_PROVIDER=sentence_transformer
 sentence-transformers>=3.0,<6.0
 
+# YouTube links: fetches the video's captions (unofficial; reads what the player shows)
+youtube-transcript-api>=1.0,<2.0
+
 # VECTOR_STORE=qdrant
 qdrant-client>=1.9,<2.0
 

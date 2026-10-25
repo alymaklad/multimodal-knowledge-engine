@@ -1,5 +1,4 @@
 from pathlib import Path
-from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,9 +8,8 @@ from app.models.collection import Collection
 from app.models.job import ProcessingJob
 from app.models.source import Source, SourceKind, SourceStatus
 from app.services.jobs import record_job_event
+from app.services.links import normalize_link
 from app.services.storage import SavedUpload
-
-YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 
 
 class DuplicateSourceError(Exception):
@@ -19,23 +17,26 @@ class DuplicateSourceError(Exception):
         self.source = source
 
 
-def kind_for_url(url: str) -> SourceKind:
-    return SourceKind.youtube if (urlparse(url).hostname or "").lower() in YOUTUBE_HOSTS else SourceKind.web
-
-
 def create_url_source(
     db: Session, *, user_id: str, url: str, title: str | None = None, collection: Collection | None = None
 ) -> Source:
-    """Record a link in the library. Duplicates are detected per owner, not per collection."""
-    url = url.rstrip("/")
-    existing = db.scalar(select(Source).where(Source.user_id == user_id, Source.origin_url == url))
+    """Record a link in the library. Duplicates are detected per owner on the normalised link.
+
+    Nothing is fetched here: the request must stay fast, and fetching someone else's server belongs
+    in the worker with its timeouts and network checks. Raises `InvalidLinkError` for a link that
+    cannot be added.
+    """
+    link = normalize_link(url)
+    existing = db.scalar(select(Source).where(Source.user_id == user_id, Source.origin_url == link.url))
     if existing:
         raise DuplicateSourceError(existing)
     source = Source(
         user_id=user_id,
-        kind=kind_for_url(url),
-        title=(title or "").strip() or url,
-        origin_url=url,
+        kind=link.kind,
+        # Until the fetch finds the page title, the link itself is the most useful label.
+        title=(title or "").strip() or link.url,
+        origin_url=link.url,
+        details=link.details,
         status=SourceStatus.pending,
         processing_version=get_settings().processing_version,
     )
@@ -48,6 +49,7 @@ def create_uploaded_source(
     user_id: str,
     upload: SavedUpload,
     kind: SourceKind,
+    title: str | None = None,
     original_filename: str | None = None,
     mime_type: str | None = None,
     collection: Collection | None = None,
@@ -59,7 +61,7 @@ def create_uploaded_source(
     source = Source(
         user_id=user_id,
         kind=kind,
-        title=Path(original_filename).stem if original_filename else Path(upload.path).name,
+        title=title or (Path(original_filename).stem if original_filename else Path(upload.path).name),
         original_filename=original_filename,
         mime_type=mime_type,
         content_hash=upload.sha256,

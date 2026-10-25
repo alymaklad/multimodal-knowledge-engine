@@ -15,6 +15,17 @@ class Settings(BaseSettings):
     processing_version: str = "v1"
     media_root: str = "./data/media"
     max_upload_bytes: int = 100 * 1024 * 1024
+    # Pasted text is stored as a file like any upload; this bounds a single paste.
+    max_text_characters: int = 500_000
+    # Link fetching runs in the worker. Private and loopback addresses are refused unless this is
+    # enabled, so a link cannot be used to make the server read its own network.
+    fetch_allow_private_hosts: bool = False
+    fetch_timeout_seconds: float = 20.0
+    max_fetch_bytes: int = 20 * 1024 * 1024
+    fetch_max_redirects: int = 5
+    fetch_user_agent: str = "MultimodalKnowledgeEngine/0.1 (+personal knowledge base; fetches links its user added)"
+    # Comma-separated, in order of preference. Any other language is used when none of these exists.
+    youtube_transcript_languages: str = "en"
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     frame_sample_fps: float = 1.0
