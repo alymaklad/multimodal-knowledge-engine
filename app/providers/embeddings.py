@@ -62,7 +62,7 @@ class HashingEmbeddingProvider(EmbeddingProvider):
 
 @lru_cache(maxsize=2)
 def _load_sentence_transformer(model_name: str, fp16: bool):
-    """Cached per process: this provider is constructed on every search and every indexed Reel,
+    """Cached per process: this provider is constructed on every search and every indexed source,
     and loading the weights each time would dominate the work.
 
     `fp16` is part of the cache key so a changed setting cannot be served a model in the old dtype.

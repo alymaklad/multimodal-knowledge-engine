@@ -1,4 +1,4 @@
-"""Record which models produced a Reel's knowledge (architecture section 41)."""
+"""Record which models produced a source's knowledge (architecture section 41)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from app.models.embedding import ContentEmbedding
 from app.models.provenance import ProcessingProvenance
 
 
-def record_provenance(db: Session, *, reel_id: int, processing_version: str) -> ProcessingProvenance:
+def record_provenance(db: Session, *, source_id: int, processing_version: str) -> ProcessingProvenance:
     """Capture the model set actually used, read back from what the stage persisted.
 
     Reading the stored artifacts rather than the configuration means the record reflects the run
@@ -21,9 +21,9 @@ def record_provenance(db: Session, *, reel_id: int, processing_version: str) -> 
     # Sessions here run with autoflush off, so the stage's pending writes must be flushed
     # before they can be read back.
     db.flush()
-    transcript = db.scalar(select(Transcript).where(Transcript.reel_id == reel_id))
-    visual = db.scalar(select(VisualAnalysis).where(VisualAnalysis.reel_id == reel_id))
-    embedding = db.scalar(select(ContentEmbedding).where(ContentEmbedding.reel_id == reel_id))
+    transcript = db.scalar(select(Transcript).where(Transcript.source_id == source_id))
+    visual = db.scalar(select(VisualAnalysis).where(VisualAnalysis.source_id == source_id))
+    embedding = db.scalar(select(ContentEmbedding).where(ContentEmbedding.source_id == source_id))
 
     models = {
         "transcription_model": transcript.model if transcript else None,
@@ -34,9 +34,9 @@ def record_provenance(db: Session, *, reel_id: int, processing_version: str) -> 
         "extraction_prompt_version": settings.extraction_prompt_version,
     }
 
-    existing = db.scalar(select(ProcessingProvenance).where(ProcessingProvenance.reel_id == reel_id))
+    existing = db.scalar(select(ProcessingProvenance).where(ProcessingProvenance.source_id == source_id))
     if existing is None:
-        existing = ProcessingProvenance(reel_id=reel_id, processing_version=processing_version, models=models)
+        existing = ProcessingProvenance(source_id=source_id, processing_version=processing_version, models=models)
         db.add(existing)
     else:
         existing.processing_version = processing_version

@@ -6,7 +6,7 @@ from app.core.security import get_current_user_id
 from app.db.database import get_db
 from app.models.evaluation import EvaluationCase
 from app.schemas.evaluation import EvaluationCaseCreate, EvaluationCaseRead, EvaluationPrediction, EvaluationSummary
-from app.services.authorization import get_owned_collection, get_owned_reel
+from app.services.authorization import get_owned_collection, get_owned_source
 from app.services.evaluation import score_case, summarize_cases
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
@@ -16,8 +16,8 @@ router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 def create_case(payload: EvaluationCaseCreate, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)) -> EvaluationCase:
     if payload.collection_id and get_owned_collection(db, payload.collection_id, user_id) is None:
         raise HTTPException(status_code=404, detail="Collection not found")
-    if payload.reel_id and get_owned_reel(db, payload.reel_id, user_id) is None:
-        raise HTTPException(status_code=404, detail="Reel not found")
+    if payload.source_id and get_owned_source(db, payload.source_id, user_id) is None:
+        raise HTTPException(status_code=404, detail="Source not found")
     case = EvaluationCase(user_id=user_id, **payload.model_dump())
     db.add(case); db.commit(); db.refresh(case)
     return case

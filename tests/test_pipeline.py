@@ -7,9 +7,9 @@ from app.models.collection import Collection
 from app.models.job import JobStatus, ProcessingJob
 from app.models.job_event import JobEvent
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.services.video import PreparedMedia, VideoMetadata
-from app.workers.pipeline import prepare_reel_media
+from app.workers.pipeline import prepare_source_media
 
 
 class FakeVideoProcessor:
@@ -27,21 +27,23 @@ def test_prepare_job_persists_artifacts_and_advances_stage() -> None:
         collection = Collection(name="Pipeline test")
         db.add(collection)
         db.flush()
-        reel = Reel(
-            collection_id=collection.id,
-            instagram_url="upload://pipeline-test.mp4",
+        source = Source(
+            user_id=collection.user_id,
+            kind=SourceKind.video,
+            title="upload://pipeline-test.mp4",
+            collections=[collection],
             media_path="data/media/pipeline-test.mp4",
-            status=ReelStatus.pending,
+            status=SourceStatus.pending,
             processing_version="v1",
         )
-        db.add(reel)
+        db.add(source)
         db.flush()
-        job = ProcessingJob(reel_id=reel.id)
+        job = ProcessingJob(source_id=source.id)
         db.add(job)
         db.commit()
 
-        updated = prepare_reel_media(db, job.id, FakeVideoProcessor())
-        assets = list(db.scalars(select(MediaAsset).where(MediaAsset.reel_id == reel.id)))
+        updated = prepare_source_media(db, job.id, FakeVideoProcessor())
+        assets = list(db.scalars(select(MediaAsset).where(MediaAsset.source_id == source.id)))
 
         assert updated.status == JobStatus.queued
         assert updated.current_stage == "ocr_and_transcription"

@@ -6,12 +6,12 @@ rule with none of the infrastructure: the request returns `202` immediately and 
 after it.
 
 Deliberately **one job at a time**. The vision model, Whisper and the embedding model share one 8 GB
-GPU; running two Reels concurrently is the reliable way to hit out-of-memory. A queue that is slow
+GPU; running two sources concurrently is the reliable way to hit out-of-memory. A queue that is slow
 and finishes is worth more than parallelism that dies half way.
 
 What this gives up compared to Celery, stated plainly:
 
-- Work in flight is lost if the process stops. The `ProcessingJob` row survives, so the Reel can be
+- Work in flight is lost if the process stops. The `ProcessingJob` row survives, so the source can be
   processed again — nothing is silently dropped, but a restart mid-analysis means redoing it.
 - No horizontal scaling, no retry backoff, no cross-machine workers.
 
@@ -79,7 +79,7 @@ def _process(job_id: int) -> None:
     )
     from app.providers.local import EvidenceVisionProvider
     from app.providers.speech import get_speech_provider
-    from app.workers.pipeline import analyze_reel, prepare_reel_media
+    from app.workers.pipeline import analyze_source, prepare_source_media
 
     with SessionLocal() as db:
         job = db.get(ProcessingJob, job_id)
@@ -88,7 +88,7 @@ def _process(job_id: int) -> None:
             return
 
         if job.current_stage == "ingestion":
-            job = prepare_reel_media(db, job_id)
+            job = prepare_source_media(db, job_id)
             if job.status is JobStatus.failed:
                 return
 
@@ -97,7 +97,7 @@ def _process(job_id: int) -> None:
         # that stage actually re-runs it; matching only the entry stage would re-queue such a job
         # and then silently do nothing with it, leaving it exactly as stuck as before.
         if job.current_stage in ("ocr_and_transcription", "multimodal_analysis"):
-            analyze_reel(
+            analyze_source(
                 db,
                 job_id,
                 speech_provider=get_speech_provider(),
@@ -111,13 +111,13 @@ def _process(job_id: int) -> None:
 def resume_unfinished() -> int:
     """Re-queue jobs left mid-flight by a previous run.
 
-    In-process work does not survive a restart, so without this a Reel uploaded just before a
+    In-process work does not survive a restart, so without this a source uploaded just before a
     restart would sit at `queued` forever with nothing coming to collect it.
     """
     with SessionLocal() as db:
         # `multimodal_analysis` belongs here too: a worker that dies mid-analysis - an allocation
         # failure is the realistic way that happens - leaves the job at `running` on that stage with
-        # nothing that will ever collect it, so the Reel spins in the interface forever. Observed,
+        # nothing that will ever collect it, so the source spins in the interface forever. Observed,
         # not hypothetical. Re-running the stage is safe: it is retry-safe by design and replaces
         # its own prior output.
         stages = ("ingestion", "ocr_and_transcription", "multimodal_analysis")
@@ -127,8 +127,8 @@ def resume_unfinished() -> int:
             .filter(ProcessingJob.status.in_([JobStatus.queued, JobStatus.running]))
             .filter(ProcessingJob.current_stage.in_(stages))
             .all()
-            # A URL-only Reel has no media and can never progress; queueing it would spin forever.
-            if job.reel is not None and job.reel.media_path
+            # A URL-only source has no media and can never progress; queueing it would spin forever.
+            if job.source is not None and job.source.media_path
         ]
     for job_id in jobs:
         submit(job_id)

@@ -8,8 +8,9 @@ class AskRequest(BaseModel):
 
 
 class AnswerSource(BaseModel):
-    reel_id: int
-    instagram_url: str
+    source_id: int
+    title: str
+    origin_url: str | None
     content_type: str | None
     score: float
     snippet: str

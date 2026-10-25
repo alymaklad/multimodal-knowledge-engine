@@ -1059,3 +1059,35 @@ What remains is genuinely out of scope for this codebase, or needs something it 
 ## Design note
 
 The service records ingestion requests without attempting Instagram login automation or scraping. This preserves the architecture's provider-independent, policy-conscious ingestion boundary.
+
+## Completed — phase 1 of the NotebookLM-style rebuild: shared source library (2026-10-25)
+
+The project is being turned from a Reels engine into a general multimodal notebook: a library of
+sources (documents, web pages, YouTube, images, audio, video), collections built from that library,
+and a chatbot that answers only from a collection's sources. It is now named **Multimodal Knowledge
+Engine**. Agreed roadmap: (1) data model, (2) ingestion for every source type, (3) one processor per
+kind with citation locators, (4) real chunking and source-scoped retrieval, (5) chat with history,
+streaming, and chunk-level citations over switchable Claude and Ollama providers, (6) cleanup of the
+Instagram-specific extraction and docs. The frontend is deferred.
+
+Phase 1 delivered:
+
+- `Reel` became `Source`, with `kind`, `title`, `original_filename`, `mime_type`, `author`,
+  `description`, and a `details` JSON column. Every dependent table is keyed by `source_id`.
+- Sources are owned by a user, not a collection. The new `collection_sources` table links them, so
+  one source can sit in many collections and is processed and embedded once. Duplicate links and
+  file hashes are rejected across the owner's whole library.
+- Embeddings no longer carry `collection_id`; vector search takes the collection's member source ids
+  (`MatchAny` in Qdrant).
+- New endpoints: `POST /api/sources/url`, `POST /api/sources/upload` (collection optional),
+  `GET /api/sources` (library, filterable by kind, status, and collection),
+  `POST /api/collections/{id}/sources`, `DELETE /api/collections/{id}/sources/{source_id}`. Deleting
+  a collection keeps its sources; deleting a source removes it everywhere; cloning shares sources.
+- The search filter `creator` is now `author`; search results and citations carry a `title`.
+- Removed the workout planner and the AI-concept reports with their narrator. Workout and AI fields
+  inside the extraction prompts remain until phase 6.
+
+Not yet done: only video uploads are accepted and processed; URL sources are recorded but not
+fetched. The old single-page client under `app/web/static` still calls the Reel API and is stale.
+The default SQLite file moved to `data/multimodal_knowledge.db`, because `create_all` cannot migrate
+the old Reel-era tables.

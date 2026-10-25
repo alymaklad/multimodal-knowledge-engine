@@ -10,7 +10,7 @@ from app.providers.base import SpeechProvider, TranscriptionResult
 
 @lru_cache(maxsize=2)
 def _load_whisper(model_name: str, device: str, compute_type: str):
-    """Cached per process: the worker builds a speech provider for every analysed Reel."""
+    """Cached per process: the worker builds a speech provider for every analysed Source."""
     # CTranslate2 brings its own CUDA libraries; torch must claim cuDNN first. See app/core/gpu.py.
     prefer_torch_cudnn()
     try:
@@ -26,7 +26,7 @@ class FasterWhisperSpeechProvider(SpeechProvider):
     """Whisper transcription with word-level timing preserved as segments.
 
     Segments matter downstream: OCR observations already carry frame timestamps, so a timed
-    transcript lets evidence from both modalities be aligned to the same moment in the Reel.
+    transcript lets evidence from both modalities be aligned to the same moment in the source.
     """
 
     def __init__(self, model_name: str | None = None) -> None:

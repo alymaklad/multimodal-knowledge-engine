@@ -13,7 +13,7 @@ class CorrectionCreate(BaseModel):
 
 class CorrectionRead(CorrectionCreate):
     id: int
-    reel_id: int
+    source_id: int
     previous_value: Any | None
     created_at: datetime
 

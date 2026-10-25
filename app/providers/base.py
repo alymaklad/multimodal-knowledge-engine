@@ -38,8 +38,9 @@ class ExtractionResult:
 
 @dataclass(frozen=True)
 class EvidenceChunk:
-    reel_id: int
-    instagram_url: str
+    source_id: int
+    title: str
+    origin_url: str | None
     content_type: str | None
     text: str
     score: float
@@ -50,7 +51,7 @@ class GroundedAnswer:
     answer: str
     grounded: bool
     model: str
-    cited_reel_ids: list[int] = field(default_factory=list)
+    cited_source_ids: list[int] = field(default_factory=list)
 
 
 class SpeechProvider(ABC):

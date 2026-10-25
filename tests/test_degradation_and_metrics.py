@@ -11,11 +11,11 @@ from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualA
 from app.models.collection import Collection
 from app.models.job import JobStatus, ProcessingJob
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.models.stage_metric import StageMetric, StageStatus
 from app.providers.base import ExtractionResult, OCRObservation, TranscriptionResult, VisionResult
 from app.services.analysis import run_analysis
-from app.workers.pipeline import analyze_reel
+from app.workers.pipeline import analyze_source
 
 client = TestClient(app)
 
@@ -72,34 +72,36 @@ class BrokenExtraction:
         raise RuntimeError("extraction model refused")
 
 
-def _seed(db, name: str, *, with_audio: bool = True) -> tuple[Reel, ProcessingJob]:
+def _seed(db, name: str, *, with_audio: bool = True) -> tuple[Source, ProcessingJob]:
     collection = Collection(name=name)
     db.add(collection)
     db.flush()
-    reel = Reel(
-        collection_id=collection.id,
-        instagram_url=f"upload://{name}.mp4",
+    source = Source(
+        user_id=collection.user_id,
+        kind=SourceKind.video,
+        title=f"upload://{name}.mp4",
+        collections=[collection],
         media_path=f"data/media/{name}.mp4",
-        status=ReelStatus.processing,
+        status=SourceStatus.processing,
         processing_version="v1",
     )
-    db.add(reel)
+    db.add(source)
     db.flush()
     if with_audio:
-        db.add(MediaAsset(reel_id=reel.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"))
+        db.add(MediaAsset(source_id=source.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"))
     db.add(
         MediaAsset(
-            reel_id=reel.id,
+            source_id=source.id,
             kind=MediaAssetKind.frame,
             path="data/media/frame_00001.jpg",
             sequence_number=1,
             timestamp_seconds=0,
         )
     )
-    job = ProcessingJob(reel_id=reel.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
+    job = ProcessingJob(source_id=source.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
     db.add(job)
     db.commit()
-    return reel, job
+    return source, job
 
 
 def _stage(outcome, name: str):
@@ -109,10 +111,10 @@ def _stage(outcome, name: str):
 def test_failed_transcription_does_not_discard_the_ocr_and_vision_result() -> None:
     """Architecture section 50: Whisper failing continues with VLM plus OCR."""
     with SessionLocal() as db:
-        reel, _ = _seed(db, "degrade-speech")
+        source, _ = _seed(db, "degrade-speech")
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=BrokenSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=GoodVision(),
@@ -125,17 +127,17 @@ def test_failed_transcription_does_not_discard_the_ocr_and_vision_result() -> No
         assert _stage(outcome, "ocr").status is StageStatus.succeeded
         assert outcome.ocr_text == "3 sets of 10"
         assert outcome.extractions[0].data["exercise"] == "Split Squat"
-        assert db.query(OCRResult).filter(OCRResult.reel_id == reel.id).count() == 1
-        assert db.query(VisualAnalysis).filter(VisualAnalysis.reel_id == reel.id).count() == 1
+        assert db.query(OCRResult).filter(OCRResult.source_id == source.id).count() == 1
+        assert db.query(VisualAnalysis).filter(VisualAnalysis.source_id == source.id).count() == 1
 
 
 def test_failed_ocr_does_not_discard_the_transcript() -> None:
     """Architecture section 50: OCR failing continues with VLM plus transcript."""
     with SessionLocal() as db:
-        reel, _ = _seed(db, "degrade-ocr")
+        source, _ = _seed(db, "degrade-ocr")
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=BrokenOCR(),
             vision_provider=GoodVision(),
@@ -145,16 +147,16 @@ def test_failed_ocr_does_not_discard_the_transcript() -> None:
 
         assert _stage(outcome, "ocr").status is StageStatus.failed
         assert outcome.transcript_text == "Spoken narration."
-        assert db.query(Transcript).filter(Transcript.reel_id == reel.id).count() == 1
-        assert db.query(ExtractedContent).filter(ExtractedContent.reel_id == reel.id).count() == 1
+        assert db.query(Transcript).filter(Transcript.source_id == source.id).count() == 1
+        assert db.query(ExtractedContent).filter(ExtractedContent.source_id == source.id).count() == 1
 
 
 def test_vision_failure_falls_back_before_giving_up() -> None:
     with SessionLocal() as db:
-        reel, _ = _seed(db, "degrade-vision-fallback")
+        source, _ = _seed(db, "degrade-vision-fallback")
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=BrokenVision(),
@@ -168,16 +170,16 @@ def test_vision_failure_falls_back_before_giving_up() -> None:
         assert stage.model == "local-evidence-v1"
         assert "503" in stage.error_message
         assert outcome.degraded is False  # degraded is not failed: the stage produced a result
-        stored = db.query(VisualAnalysis).filter(VisualAnalysis.reel_id == reel.id).one()
+        stored = db.query(VisualAnalysis).filter(VisualAnalysis.source_id == source.id).one()
         assert stored.model == "local-evidence-v1"
 
 
 def test_vision_failure_without_a_fallback_still_runs_extraction() -> None:
     with SessionLocal() as db:
-        reel, _ = _seed(db, "degrade-vision-hard")
+        source, _ = _seed(db, "degrade-vision-hard")
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=BrokenVision(),
@@ -188,16 +190,16 @@ def test_vision_failure_without_a_fallback_still_runs_extraction() -> None:
         assert _stage(outcome, "vision").status is StageStatus.failed
         assert outcome.degraded is True
         assert outcome.failed_stages == ["vision"]
-        assert db.query(VisualAnalysis).filter(VisualAnalysis.reel_id == reel.id).count() == 0
+        assert db.query(VisualAnalysis).filter(VisualAnalysis.source_id == source.id).count() == 0
         assert outcome.extractions  # extraction still ran on OCR and transcript evidence
 
 
 def test_failed_extraction_preserves_the_previous_knowledge() -> None:
     with SessionLocal() as db:
-        reel, _ = _seed(db, "degrade-extraction")
+        source, _ = _seed(db, "degrade-extraction")
         run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=GoodVision(),
@@ -207,7 +209,7 @@ def test_failed_extraction_preserves_the_previous_knowledge() -> None:
 
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=GoodVision(),
@@ -216,15 +218,15 @@ def test_failed_extraction_preserves_the_previous_knowledge() -> None:
         db.commit()
         assert _stage(outcome, "extraction").status is StageStatus.failed
         # A failed run must not erase knowledge a good run produced.
-        assert db.query(ExtractedContent).filter(ExtractedContent.reel_id == reel.id).count() == 1
+        assert db.query(ExtractedContent).filter(ExtractedContent.source_id == source.id).count() == 1
 
 
-def test_a_silent_reel_marks_transcription_skipped_not_failed() -> None:
+def test_a_silent_source_marks_transcription_skipped_not_failed() -> None:
     with SessionLocal() as db:
-        reel, _ = _seed(db, "silent-skip", with_audio=False)
+        source, _ = _seed(db, "silent-skip", with_audio=False)
         outcome = run_analysis(
             db,
-            reel_id=reel.id,
+            source_id=source.id,
             speech_provider=GoodSpeech(),
             ocr_provider=GoodOCR(),
             vision_provider=GoodVision(),
@@ -237,8 +239,8 @@ def test_a_silent_reel_marks_transcription_skipped_not_failed() -> None:
 
 def test_worker_records_stage_metrics_and_routes_a_degraded_run_to_review() -> None:
     with SessionLocal() as db:
-        reel, job = _seed(db, "metrics-degraded")
-        updated = analyze_reel(
+        source, job = _seed(db, "metrics-degraded")
+        updated = analyze_source(
             db,
             job.id,
             speech_provider=GoodSpeech(),
@@ -248,7 +250,7 @@ def test_worker_records_stage_metrics_and_routes_a_degraded_run_to_review() -> N
         )
         # Extraction confidence is 0.95, which would normally auto-accept; the failed stage wins.
         assert updated.status == JobStatus.needs_review
-        metrics = list(db.query(StageMetric).filter(StageMetric.reel_id == reel.id))
+        metrics = list(db.query(StageMetric).filter(StageMetric.source_id == source.id))
         assert {metric.stage for metric in metrics} == {"transcription", "ocr", "vision", "extraction"}
         vision_metric = next(metric for metric in metrics if metric.stage == "vision")
         assert vision_metric.status is StageStatus.failed
@@ -258,25 +260,26 @@ def test_worker_records_stage_metrics_and_routes_a_degraded_run_to_review() -> N
 
 
 def test_pipeline_metrics_endpoint_aggregates_latency_and_failure_rate() -> None:
-    # A dedicated identity, because the endpoint aggregates every Reel the user owns and other
-    # tests in this module analyse Reels under the default one.
+    # A dedicated identity, because the endpoint aggregates every source the user owns and other
+    # tests in this module analyse Sources under the default one.
     owner = {"X-User-Id": "metrics-owner"}
     collection_id = client.post("/api/collections", json={"name": "Metrics"}, headers=owner).json()["id"]
     with SessionLocal() as db:
-        reel = Reel(
-            collection_id=collection_id,
-            instagram_url="upload://metrics-endpoint.mp4",
-            status=ReelStatus.completed,
+        source = Source(
+            user_id="metrics-owner",
+            kind=SourceKind.video,
+            title="metrics-endpoint",
+            status=SourceStatus.completed,
             processing_version="v1",
         )
-        db.add(reel)
+        db.add(source)
         db.flush()
         db.add_all(
             [
-                StageMetric(reel_id=reel.id, stage="ocr", status=StageStatus.succeeded, duration_ms=10.0, items_processed=4),
-                StageMetric(reel_id=reel.id, stage="ocr", status=StageStatus.failed, duration_ms=30.0),
-                StageMetric(reel_id=reel.id, stage="transcription", status=StageStatus.skipped, duration_ms=0.0),
-                StageMetric(reel_id=reel.id, stage="vision", status=StageStatus.succeeded, duration_ms=50.0, model="fake-vlm"),
+                StageMetric(source_id=source.id, stage="ocr", status=StageStatus.succeeded, duration_ms=10.0, items_processed=4),
+                StageMetric(source_id=source.id, stage="ocr", status=StageStatus.failed, duration_ms=30.0),
+                StageMetric(source_id=source.id, stage="transcription", status=StageStatus.skipped, duration_ms=0.0),
+                StageMetric(source_id=source.id, stage="vision", status=StageStatus.succeeded, duration_ms=50.0, model="fake-vlm"),
             ]
         )
         db.commit()
@@ -292,14 +295,14 @@ def test_pipeline_metrics_endpoint_aggregates_latency_and_failure_rate() -> None
     # A skipped stage never ran, so it must not inflate the failure rate.
     assert stages["transcription"]["failure_rate"] == 0.0
     assert stages["vision"]["models"] == ["fake-vlm"]
-    assert body["degraded_reels"] == 1
+    assert body["degraded_sources"] == 1
     assert body["stages"][0]["stage"] == "transcription"
 
 
 def test_pipeline_metrics_are_owner_scoped() -> None:
     response = client.get("/api/system/metrics/pipeline", headers={"X-User-Id": "nobody-here"})
     assert response.status_code == 200
-    assert response.json() == {"analyzed_reels": 0, "degraded_reels": 0, "stages": []}
+    assert response.json() == {"analyzed_sources": 0, "degraded_sources": 0, "stages": []}
 
 
 def test_json_formatter_emits_request_id_and_extra_fields() -> None:

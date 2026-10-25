@@ -1,6 +1,6 @@
 """Multimodal analysis with independently failing stages (architecture sections 49 and 50).
 
-Every perception stage is isolated. A failing OCR pass must not discard a Reel whose speech
+Every perception stage is isolated. A failing OCR pass must not discard a source whose speech
 transcribed perfectly, and a failing transcription must not discard its on-screen text. Each stage
 records what it did, how long it took, and whether it degraded, so a partial result is visible as a
 partial result rather than silently indistinguishable from a clean run.
@@ -79,7 +79,7 @@ class _Timer:
 def run_analysis(
     db: Session,
     *,
-    reel_id: int,
+    source_id: int,
     speech_provider: SpeechProvider | None,
     ocr_provider: OCRProvider,
     vision_provider: VisionProvider,
@@ -87,7 +87,7 @@ def run_analysis(
     fallback_vision_provider: VisionProvider | None = None,
 ) -> AnalysisOutcome:
     """Run every stage, degrading rather than aborting when one provider fails."""
-    assets = list(db.query(MediaAsset).filter(MediaAsset.reel_id == reel_id))
+    assets = list(db.query(MediaAsset).filter(MediaAsset.source_id == source_id))
     audio = next((asset for asset in assets if asset.kind == MediaAssetKind.audio), None)
     frames = sorted(
         (asset for asset in assets if asset.kind == MediaAssetKind.frame),
@@ -96,18 +96,18 @@ def run_analysis(
     frame_paths = [Path(asset.path) for asset in frames]
     stages: list[StageOutcome] = []
 
-    transcript_text, stage = _transcribe(db, reel_id, audio, speech_provider)
+    transcript_text, stage = _transcribe(db, source_id, audio, speech_provider)
     stages.append(stage)
 
-    ocr_text, stage = _run_ocr(db, reel_id, frames, frame_paths, ocr_provider)
+    ocr_text, stage = _run_ocr(db, source_id, frames, frame_paths, ocr_provider)
     stages.append(stage)
 
     vision, stage = _run_vision(
-        db, reel_id, frame_paths, transcript_text, ocr_text, vision_provider, fallback_vision_provider
+        db, source_id, frame_paths, transcript_text, ocr_text, vision_provider, fallback_vision_provider
     )
     stages.append(stage)
 
-    extracted, stage = _run_extraction(db, reel_id, vision, transcript_text, ocr_text, extraction_provider)
+    extracted, stage = _run_extraction(db, source_id, vision, transcript_text, ocr_text, extraction_provider)
     stages.append(stage)
 
     return AnalysisOutcome(
@@ -116,22 +116,22 @@ def run_analysis(
 
 
 def _transcribe(
-    db: Session, reel_id: int, audio: MediaAsset | None, provider: SpeechProvider | None
+    db: Session, source_id: int, audio: MediaAsset | None, provider: SpeechProvider | None
 ) -> tuple[str, StageOutcome]:
     if audio is None or provider is None:
-        # A silent Reel, or transcription intentionally disabled: not a failure.
+        # A silent source, or transcription intentionally disabled: not a failure.
         reason = "No audio track was extracted" if provider else "No speech provider is configured"
         return "", StageOutcome(SPEECH_STAGE, StageStatus.skipped, 0.0, error_message=reason)
     with _Timer() as timer:
         try:
             result = provider.transcribe(Path(audio.path))
         except Exception as error:
-            logger.warning("Transcription failed for reel %s: %s", reel_id, error, exc_info=True)
+            logger.warning("Transcription failed for source %s: %s", source_id, error, exc_info=True)
             return "", StageOutcome(SPEECH_STAGE, StageStatus.failed, timer.duration_ms, error_message=str(error))
-    db.execute(delete(Transcript).where(Transcript.reel_id == reel_id))
+    db.execute(delete(Transcript).where(Transcript.source_id == source_id))
     db.add(
         Transcript(
-            reel_id=reel_id,
+            source_id=source_id,
             text=result.text,
             language=result.language,
             segments=result.segments,
@@ -149,7 +149,7 @@ def _transcribe(
 
 def _run_ocr(
     db: Session,
-    reel_id: int,
+    source_id: int,
     frames: list[MediaAsset],
     frame_paths: list[Path],
     provider: OCRProvider,
@@ -160,16 +160,16 @@ def _run_ocr(
         try:
             observations = provider.extract(frame_paths)
         except Exception as error:
-            logger.warning("OCR failed for reel %s: %s", reel_id, error, exc_info=True)
+            logger.warning("OCR failed for source %s: %s", source_id, error, exc_info=True)
             return "", StageOutcome(OCR_STAGE, StageStatus.failed, timer.duration_ms, error_message=str(error))
     # Normalize separator conventions because providers receive `Path` values on Windows/Linux.
     asset_by_path = {str(Path(asset.path)): asset for asset in frames}
-    db.execute(delete(OCRResult).where(OCRResult.reel_id == reel_id))
+    db.execute(delete(OCRResult).where(OCRResult.source_id == source_id))
     for observation in observations:
         frame = asset_by_path.get(str(Path(observation.frame_path)))
         db.add(
             OCRResult(
-                reel_id=reel_id,
+                source_id=source_id,
                 frame_asset_id=frame.id if frame else None,
                 timestamp_seconds=frame.timestamp_seconds if frame else None,
                 text=observation.text,
@@ -186,7 +186,7 @@ def _distinct_lines(observations: list[Any]) -> str:
     """Collapse the OCR text passed downstream to its distinct lines, in first-seen order.
 
     A burned-in caption is detected in *every* sampled frame, so a raw join repeats the same two
-    lines once per frame — 120 times on a long Reel. That bloats the prompt with no new information
+    lines once per frame — 120 times on a long Source. That bloats the prompt with no new information
     and, observed here, pushed a small vision model into a repetition loop that produced truncated,
     unparsable JSON.
 
@@ -225,7 +225,7 @@ def _release_vision_memory(*, unload: bool) -> None:
 
 def _run_vision(
     db: Session,
-    reel_id: int,
+    source_id: int,
     frame_paths: list[Path],
     transcript_text: str,
     ocr_text: str,
@@ -239,7 +239,7 @@ def _run_vision(
             status, error_message = StageStatus.succeeded, None
             _release_vision_memory(unload=False)
         except Exception as error:
-            logger.warning("Vision analysis failed for reel %s: %s", reel_id, error, exc_info=True)
+            logger.warning("Vision analysis failed for source %s: %s", source_id, error, exc_info=True)
             error_message = str(error)
             vision, status = None, StageStatus.failed
             # An allocation failure leaves the device exhausted, and the next model to load is the
@@ -250,25 +250,25 @@ def _run_vision(
                     vision = fallback.analyze_video(frame_paths, transcript_text, ocr_text)
                     status = StageStatus.degraded
                 except Exception as fallback_error:
-                    logger.warning("Vision fallback failed for reel %s: %s", reel_id, fallback_error)
+                    logger.warning("Vision fallback failed for source %s: %s", source_id, fallback_error)
                     error_message = f"{error_message}; fallback also failed: {fallback_error}"
     if vision is None:
         # Downstream stages still run: OCR and transcript evidence remain usable on their own.
         vision = VisionResult(
-            description="Visual analysis was unavailable for this Reel.",
+            description="Visual analysis was unavailable for this source.",
             analysis={"error": error_message},
             confidence=0.0,
             model="unavailable",
         )
-        db.execute(delete(VisualAnalysis).where(VisualAnalysis.reel_id == reel_id))
+        db.execute(delete(VisualAnalysis).where(VisualAnalysis.source_id == source_id))
         return vision, StageOutcome(
             VISION_STAGE, StageStatus.failed, timer.duration_ms, error_message=error_message
         )
 
-    db.execute(delete(VisualAnalysis).where(VisualAnalysis.reel_id == reel_id))
+    db.execute(delete(VisualAnalysis).where(VisualAnalysis.source_id == source_id))
     db.add(
         VisualAnalysis(
-            reel_id=reel_id,
+            source_id=source_id,
             description=vision.description,
             analysis_json=vision.analysis,
             model=vision.model,
@@ -287,7 +287,7 @@ def _run_vision(
 
 def _run_extraction(
     db: Session,
-    reel_id: int,
+    source_id: int,
     vision: VisionResult,
     transcript_text: str,
     ocr_text: str,
@@ -297,16 +297,16 @@ def _run_extraction(
         try:
             extracted = provider.extract(vision, transcript_text, ocr_text)
         except Exception as error:
-            logger.warning("Extraction failed for reel %s: %s", reel_id, error, exc_info=True)
+            logger.warning("Extraction failed for source %s: %s", source_id, error, exc_info=True)
             # Prior knowledge is left untouched: a failed run should not erase a good one.
             return [], StageOutcome(
                 EXTRACTION_STAGE, StageStatus.failed, timer.duration_ms, error_message=str(error)
             )
-    db.execute(delete(ExtractedContent).where(ExtractedContent.reel_id == reel_id))
+    db.execute(delete(ExtractedContent).where(ExtractedContent.source_id == source_id))
     for result in extracted:
         db.add(
             ExtractedContent(
-                reel_id=reel_id,
+                source_id=source_id,
                 content_type=result.content_type,
                 data=result.data,
                 text_representation=result.text_representation,

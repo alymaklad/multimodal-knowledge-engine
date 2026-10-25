@@ -16,12 +16,12 @@ class JobStatus(str, enum.Enum):
 
 
 class ProcessingJob(Base):
-    """A durable Reel-processing attempt, ready for a future worker to claim."""
+    """A durable source-processing attempt, ready for a future worker to claim."""
 
     __tablename__ = "processing_jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    reel_id: Mapped[int] = mapped_column(ForeignKey("reels.id"), unique=True, index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), unique=True, index=True)
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.queued, index=True)
     current_stage: Mapped[str] = mapped_column(String(64), default="ingestion")
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -31,5 +31,5 @@ class ProcessingJob(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    reel: Mapped["Reel"] = relationship(back_populates="processing_job")
+    source: Mapped["Source"] = relationship(back_populates="processing_job")
     events: Mapped[list["JobEvent"]] = relationship(back_populates="job", cascade="all, delete-orphan")

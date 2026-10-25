@@ -7,10 +7,10 @@ from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualA
 from app.models.collection import Collection
 from app.models.job import JobStatus, ProcessingJob
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.providers.base import ExtractionResult, OCRObservation, TranscriptionResult, VisionResult
 from app.services.retrieval import search_collection
-from app.workers.pipeline import analyze_reel
+from app.workers.pipeline import analyze_source
 from app.main import app
 from fastapi.testclient import TestClient
 
@@ -19,7 +19,7 @@ client = TestClient(app)
 
 class FakeSpeechProvider:
     def transcribe(self, _audio_path: Path) -> TranscriptionResult:
-        return TranscriptionResult(text="This Reel explains hybrid retrieval.", language="en", model="fake-whisper")
+        return TranscriptionResult(text="This source explains hybrid retrieval.", language="en", model="fake-whisper")
 
 
 class FakeOCRProvider:
@@ -49,20 +49,22 @@ def test_analysis_worker_persists_multimodal_knowledge_and_searches_it() -> None
         collection = Collection(name="Analysis test")
         db.add(collection)
         db.flush()
-        reel = Reel(
-            collection_id=collection.id,
-            instagram_url="upload://analysis-test.mp4",
+        source = Source(
+            user_id=collection.user_id,
+            kind=SourceKind.video,
+            title="upload://analysis-test.mp4",
+            collections=[collection],
             media_path="data/media/analysis-test.mp4",
-            status=ReelStatus.processing,
+            status=SourceStatus.processing,
             processing_version="v1",
         )
-        db.add(reel)
+        db.add(source)
         db.flush()
         db.add_all(
             [
-                MediaAsset(reel_id=reel.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"),
+                MediaAsset(source_id=source.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"),
                 MediaAsset(
-                    reel_id=reel.id,
+                    source_id=source.id,
                     kind=MediaAssetKind.frame,
                     path="data/media/frame_00001.jpg",
                     sequence_number=1,
@@ -70,11 +72,11 @@ def test_analysis_worker_persists_multimodal_knowledge_and_searches_it() -> None
                 ),
             ]
         )
-        job = ProcessingJob(reel_id=reel.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
+        job = ProcessingJob(source_id=source.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
         db.add(job)
         db.commit()
 
-        updated = analyze_reel(
+        updated = analyze_source(
             db,
             job.id,
             speech_provider=FakeSpeechProvider(),
@@ -84,19 +86,19 @@ def test_analysis_worker_persists_multimodal_knowledge_and_searches_it() -> None
         )
 
         assert updated.status == JobStatus.completed
-        assert db.scalar(select(Transcript).where(Transcript.reel_id == reel.id)).model == "fake-whisper"
-        assert db.scalar(select(OCRResult).where(OCRResult.reel_id == reel.id)).text == "BM25 + embeddings"
-        assert db.scalar(select(VisualAnalysis).where(VisualAnalysis.reel_id == reel.id)).model == "fake-vlm"
-        assert db.scalar(select(ExtractedContent).where(ExtractedContent.reel_id == reel.id)).data["topic"] == "hybrid search"
+        assert db.scalar(select(Transcript).where(Transcript.source_id == source.id)).model == "fake-whisper"
+        assert db.scalar(select(OCRResult).where(OCRResult.source_id == source.id)).text == "BM25 + embeddings"
+        assert db.scalar(select(VisualAnalysis).where(VisualAnalysis.source_id == source.id)).model == "fake-vlm"
+        assert db.scalar(select(ExtractedContent).where(ExtractedContent.source_id == source.id)).data["topic"] == "hybrid search"
 
         results = search_collection(db, collection_id=collection.id, query="hybrid BM25", limit=10)
         assert len(results) == 1
-        assert results[0].reel_id == reel.id
+        assert results[0].source_id == source.id
 
-        response = client.get(f"/api/reels/{reel.id}/analysis")
+        response = client.get(f"/api/sources/{source.id}/analysis")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["transcript"]["text"] == "This Reel explains hybrid retrieval."
+        assert payload["transcript"]["text"] == "This source explains hybrid retrieval."
         assert payload["ocr_results"][0]["timestamp_seconds"] == 0
         assert payload["extracted_content"][0]["content_type"] == "ai_knowledge"
 
@@ -123,32 +125,34 @@ class SilentOCRProvider:
         return [OCRObservation(frame_path=str(frame_paths[0]), text="Bulgarian Split Squat 3 sets", confidence=0.95)]
 
 
-def _seed_analyzable_reel(db, name: str) -> tuple[Reel, ProcessingJob]:
+def _seed_analyzable_source(db, name: str) -> tuple[Source, ProcessingJob]:
     collection = Collection(name=name)
     db.add(collection)
     db.flush()
-    reel = Reel(
-        collection_id=collection.id,
-        instagram_url=f"upload://{name}.mp4",
+    source = Source(
+        user_id=collection.user_id,
+        kind=SourceKind.video,
+        title=f"upload://{name}.mp4",
+        collections=[collection],
         media_path=f"data/media/{name}.mp4",
-        status=ReelStatus.processing,
+        status=SourceStatus.processing,
         processing_version="v1",
     )
-    db.add(reel)
+    db.add(source)
     db.flush()
     db.add(
         MediaAsset(
-            reel_id=reel.id,
+            source_id=source.id,
             kind=MediaAssetKind.frame,
             path="data/media/frame_00001.jpg",
             sequence_number=1,
             timestamp_seconds=0,
         )
     )
-    job = ProcessingJob(reel_id=reel.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
+    job = ProcessingJob(source_id=source.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
     db.add(job)
     db.commit()
-    return reel, job
+    return source, job
 
 
 def _verification_event(db, job_id: int):
@@ -160,10 +164,10 @@ def _verification_event(db, job_id: int):
 
 
 def test_mid_confidence_knowledge_is_accepted_when_on_screen_text_corroborates_it() -> None:
-    """A silent Reel whose sets/reps are only on screen still completes (architecture section 23)."""
+    """A silent source whose sets/reps are only on screen still completes (architecture section 23)."""
     with SessionLocal() as db:
-        reel, job = _seed_analyzable_reel(db, "verified-silent")
-        updated = analyze_reel(
+        source, job = _seed_analyzable_source(db, "verified-silent")
+        updated = analyze_source(
             db,
             job.id,
             speech_provider=None,
@@ -172,14 +176,14 @@ def test_mid_confidence_knowledge_is_accepted_when_on_screen_text_corroborates_i
             extraction_provider=MidConfidenceExtractionProvider("Bulgarian Split Squat"),
         )
         assert updated.status == JobStatus.completed
-        assert db.get(Reel, reel.id).status == ReelStatus.completed
+        assert db.get(Source, source.id).status == SourceStatus.completed
         assert _verification_event(db, job.id).event_type == "verified"
 
 
 def test_mid_confidence_knowledge_without_corroboration_is_routed_to_review() -> None:
     with SessionLocal() as db:
-        reel, job = _seed_analyzable_reel(db, "unverified-silent")
-        updated = analyze_reel(
+        source, job = _seed_analyzable_source(db, "unverified-silent")
+        updated = analyze_source(
             db,
             job.id,
             speech_provider=None,
@@ -188,7 +192,7 @@ def test_mid_confidence_knowledge_without_corroboration_is_routed_to_review() ->
             extraction_provider=MidConfidenceExtractionProvider("Barbell Back Squat"),
         )
         assert updated.status == JobStatus.needs_review
-        assert db.get(Reel, reel.id).status == ReelStatus.needs_review
+        assert db.get(Source, source.id).status == SourceStatus.needs_review
         event = _verification_event(db, job.id)
         assert event.event_type == "needs_review"
         assert "workout_exercise.exercise" in event.message

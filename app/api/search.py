@@ -23,7 +23,7 @@ def search(
             query=payload.query,
             limit=payload.limit,
             content_type=payload.content_type,
-            creator=payload.creator,
+            author=payload.author,
             topic=payload.topic,
         )
     if payload.mode == "hybrid":
@@ -33,7 +33,7 @@ def search(
             query=payload.query,
             limit=payload.limit,
             content_type=payload.content_type,
-            creator=payload.creator,
+            author=payload.author,
             topic=payload.topic,
         )
     return search_collection(
@@ -43,6 +43,6 @@ def search(
         limit=payload.limit,
         content_type=payload.content_type,
         minimum_score=payload.minimum_score,
-        creator=payload.creator,
+        author=payload.author,
         topic=payload.topic,
     )

@@ -4,7 +4,7 @@ from app.core.config import get_settings
 
 settings = get_settings()
 celery_app = Celery(
-    "instagram_knowledge_engine",
+    "multimodal_knowledge_engine",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=["app.workers.tasks"],

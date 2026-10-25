@@ -1,1 +1,1 @@
-"""Instagram multimodal knowledge engine backend."""
+"""Multimodal Knowledge Engine backend."""

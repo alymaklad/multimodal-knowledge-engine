@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class UserMetrics(BaseModel):
     collections: int
-    reels_by_status: dict[str, int]
+    sources_by_status: dict[str, int]
     jobs_by_status: dict[str, int]
     review_queue_size: int
 
@@ -23,8 +23,8 @@ class StageLatency(BaseModel):
 
 
 class PipelineMetrics(BaseModel):
-    """Per-stage latency and failure rates for the current user's Reels."""
+    """Per-stage latency and failure rates for the current user's sources."""
 
-    analyzed_reels: int
-    degraded_reels: int
+    analyzed_sources: int
+    degraded_sources: int
     stages: list[StageLatency]

@@ -4,7 +4,7 @@ from app.providers.base import ExtractionResult, VisionResult
 from app.providers.local import RuleBasedExtractionProvider
 from app.providers.structured_extraction import VisionFieldExtractionProvider
 
-# The fields Qwen2.5-VL actually returned for a real split-squat Reel, including its evidence map,
+# The fields Qwen2.5-VL actually returned for a real split-squat Source, including its evidence map,
 # which labelled everything "visual" even though reps came from on-screen text and the technique
 # note was quoted from the narration.
 QWEN_ANALYSIS = {
@@ -101,7 +101,7 @@ def test_ai_knowledge_records_are_produced_too() -> None:
     assert "Topic: hybrid search." in records[0].text_representation
 
 
-def test_both_record_types_can_come_from_one_reel() -> None:
+def test_both_record_types_can_come_from_one_source() -> None:
     analysis = {"exercise": "Squat", "topic": "strength training"}
     records = VisionFieldExtractionProvider().extract(_vision(analysis), "", "")
     assert sorted(r.content_type for r in records) == ["ai_knowledge", "workout_exercise"]

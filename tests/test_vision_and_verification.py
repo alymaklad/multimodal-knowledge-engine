@@ -44,7 +44,7 @@ def _write_frames(directory: Path, count: int) -> list[Path]:
     return paths
 
 
-def test_select_frames_spans_the_whole_reel() -> None:
+def test_select_frames_spans_the_whole_source() -> None:
     frames = [Path(f"frame_{index}.jpg") for index in range(100)]
     chosen = select_frames(frames, 5)
     assert len(chosen) == 5

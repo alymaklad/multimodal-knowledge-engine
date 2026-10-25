@@ -4,7 +4,7 @@ The same contract as the Claude vision provider, run on your own GPU. Qwen2.5-VL
 takes multiple images in one turn natively, which is what the architecture's multi-frame reasoning
 needs: a movement cannot be identified from a single frame.
 
-**Loading is expensive, so the model is cached per process.** A Celery worker analysing many Reels
+**Loading is expensive, so the model is cached per process.** A Celery worker analysing many Sources
 must not reload several gigabytes of weights per task.
 
 Memory note for 8 GB cards: frames dominate the KV cache far more than the prompt does. If you hit
@@ -115,7 +115,7 @@ class QwenVisionProvider(VisionProvider):
         frames = select_frames(frame_paths, self._max_frames)
         if not frames:
             return VisionResult(
-                description="No frames were sampled from this Reel, so no visual analysis is possible.",
+                description="No frames were sampled from this source, so no visual analysis is possible.",
                 analysis={"frame_count": 0, "evidence": {}},
                 confidence=0.0,
                 model=f"{self._model_name}-vision",
@@ -243,7 +243,7 @@ def _schema_constraint(processor_id: int, tokenizer: Any) -> Any:
     """A token filter that makes schema-invalid output impossible to emit.
 
     Everything before this was detection after the fact: parse what came back, and discard it when
-    it was malformed. Across runs on one real Reel this model produced a schema-shaped echo, a
+    it was malformed. Across runs on one real source this model produced a schema-shaped echo, a
     repetition loop, unescaped control characters, and single-quoted strings with an unterminated
     array. Each is individually patchable, but patching them one at a time means writing a JSON
     repairer - and a repairer has to guess at intent, which risks inventing values.
@@ -312,7 +312,7 @@ def _generate(
         generated = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            # Greedy, for reproducible extraction: the same Reel should yield the same record.
+            # Greedy, for reproducible extraction: the same source should yield the same record.
             do_sample=False,
             # A mild penalty against degenerate repetition. Still useful under constraint, which
             # forbids invalid *structure* but would happily allow a valid array of repeated strings.
@@ -351,7 +351,7 @@ def _parse_json(payload: str) -> dict[str, Any] | None:
             candidate = candidate[start : end + 1]
     try:
         # strict=False permits literal control characters inside string values. Observed on a real
-        # Reel: the model quoted the narration into a field and left the newlines unescaped, which
+        # source: the model quoted the narration into a field and left the newlines unescaped, which
         # strict JSON rejects outright even though the structure is sound. Tolerating that recovers
         # a usable record instead of discarding a correct answer over whitespace encoding.
         parsed = json.loads(candidate, strict=False)

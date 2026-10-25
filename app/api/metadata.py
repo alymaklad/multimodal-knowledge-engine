@@ -42,7 +42,7 @@ def capabilities() -> dict[str, object]:
     if settings.vector_store.lower() == "database":
         limitations.append("exact brute-force vector scan; move to Qdrant for large collections")
     return {
-        "ingestion": ["instagram_reel_url", "local_video_upload"],
+        "ingestion": ["web_url", "youtube_url", "local_video_upload"],
         "media_preparation": {
             "features": ["ffmpeg_audio", "frame_sampling"],
             # Resolved paths, not a claim: an upload fails deep in the pipeline if these are
@@ -81,7 +81,7 @@ def capabilities() -> dict[str, object]:
         "provider_contracts": ["speech", "ocr", "vision", "extraction", "embedding", "answering"],
         "retrieval": {
             "modes": ["lexical", "semantic", "hybrid"],
-            "filters": ["content_type", "creator", "topic", "minimum_score"],
+            "filters": ["content_type", "author", "topic", "minimum_score"],
             "fusion": "reciprocal_rank",
             "reranker": settings.reranker,
             "embedding_provider": settings.embedding_provider,
@@ -92,20 +92,15 @@ def capabilities() -> dict[str, object]:
             "provider": settings.answer_provider,
             "grounded": True,
             "cites_sources": True,
-            "citations_restricted_to_retrieved_reels": True,
-        },
-        "reporting": {
-            "aggregates": True,
-            "narrative": settings.answer_provider.lower() in {"claude", "anthropic"},
-            "source": "database aggregates only, never whole Reels",
+            "citations_restricted_to_retrieved_sources": True,
         },
         "object_storage": {
             "backend": settings.object_store,
-            "layout": "users/{user_id}/reels/{reel_id}/",
+            "layout": "users/{user_id}/sources/{source_id}/",
             "signed_urls": settings.object_store.lower() in {"s3", "minio"},
         },
         "provenance": {
-            "recorded_per_reel": True,
+            "recorded_per_source": True,
             "fields": [
                 "transcription_model",
                 "vision_model",

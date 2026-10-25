@@ -51,8 +51,8 @@ class ProvenanceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ReelAnalysisRead(BaseModel):
-    reel_id: int
+class SourceAnalysisRead(BaseModel):
+    source_id: int
     transcript: TranscriptRead | None
     ocr_results: list[OCRResultRead]
     visual_analysis: VisualAnalysisRead | None

@@ -1,6 +1,8 @@
 # How the Multimodal Knowledge Engine Works
 
-A personal knowledge engine that turns saved Instagram Reels into structured, searchable knowledge.
+A personal knowledge engine that turns your sources into structured, searchable knowledge. It
+began with Instagram Reels, which is what the rest of this guide still describes while the project
+is generalised to documents, web pages, images, and audio.
 
 This document has two parts:
 

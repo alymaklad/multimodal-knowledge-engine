@@ -6,9 +6,9 @@ from app.db.database import get_db
 from app.providers.embeddings import get_embedding_provider
 from app.schemas.embedding import DuplicatePair, IndexResult
 from app.schemas.rag import AnswerResponse, AskRequest
-from app.services.authorization import get_owned_collection, get_owned_reel
+from app.services.authorization import get_owned_collection, get_owned_source
 from app.services.duplicates import find_near_duplicates
-from app.services.embeddings import index_collection, index_reel
+from app.services.embeddings import index_collection, index_source
 from app.services.rag import answer_collection_question
 
 router = APIRouter(prefix="/api/collections", tags=["knowledge"])
@@ -55,21 +55,20 @@ def collection_duplicates(
     return find_near_duplicates(db, collection_id=collection_id, threshold=threshold)
 
 
-reel_router = APIRouter(prefix="/api/reels", tags=["knowledge"])
+source_router = APIRouter(prefix="/api/sources", tags=["knowledge"])
 
 
-@reel_router.post("/{reel_id}/index", response_model=IndexResult)
-def rebuild_reel_index(
-    reel_id: int, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+@source_router.post("/{source_id}/index", response_model=IndexResult)
+def rebuild_source_index(
+    source_id: int, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
 ) -> IndexResult:
-    reel = get_owned_reel(db, reel_id, user_id)
-    if reel is None:
-        raise HTTPException(status_code=404, detail="Reel not found")
-    chunk_count = index_reel(db, reel)
+    source = get_owned_source(db, source_id, user_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    chunk_count = index_source(db, source)
     db.commit()
     return IndexResult(
-        collection_id=reel.collection_id,
-        indexed_reels=1 if chunk_count else 0,
+        indexed_sources=1 if chunk_count else 0,
         indexed_chunks=chunk_count,
         model=get_embedding_provider().model,
     )

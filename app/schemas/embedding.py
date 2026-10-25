@@ -2,15 +2,16 @@ from pydantic import BaseModel
 
 
 class IndexResult(BaseModel):
-    collection_id: int
-    indexed_reels: int
+    # None when a single source was reindexed: its vectors serve every collection containing it.
+    collection_id: int | None = None
+    indexed_sources: int
     indexed_chunks: int
     model: str
 
 
 class DuplicatePair(BaseModel):
-    reel_id: int
-    instagram_url: str
-    duplicate_reel_id: int
-    duplicate_instagram_url: str
+    source_id: int
+    title: str
+    duplicate_source_id: int
+    duplicate_title: str
     similarity: float

@@ -1,6 +1,16 @@
-# Multimodal Personal Knowledge Engine for Instagram Reels
+# Multimodal Knowledge Engine
 
-A FastAPI service that turns saved short-form videos (Instagram Reels) into a searchable,
+A FastAPI service in the spirit of NotebookLM: add documents, web pages, images, audio, and video
+to a personal library, group them into collections, and ask questions that are answered only from
+the sources in a collection, with citations.
+
+> **Migration in progress.** The project started as an engine for Instagram Reels and is being
+> generalised to any source type. Sources now live in a per-user library and a collection is a
+> selection over it (`POST /api/sources/url`, `POST /api/sources/upload`,
+> `POST /api/collections/{id}/sources`). Video is the only source type processed so far, and the
+> sections below still describe the original video pipeline.
+
+The video pipeline turns saved short-form videos into a searchable,
 evidence-backed knowledge base. Each video goes through FFmpeg preparation, then speech
 transcription, OCR, multi-frame vision analysis, and structured extraction. The results are
 embedded per modality for lexical, semantic, and hybrid retrieval, and questions are answered only
@@ -464,7 +474,7 @@ ones:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `sqlite:///./data/instagram_knowledge.db` | Use `postgresql+psycopg://…` in deployment. |
+| `DATABASE_URL` | `sqlite:///./data/multimodal_knowledge.db` | Use `postgresql+psycopg://…` in deployment. |
 | `TASK_RUNNER` | `celery` | `local` for a single-user install without Redis. |
 | `SPEECH_PROVIDER` / `OCR_PROVIDER` | `none` / `tesseract` | See [Provider abstraction](#provider-abstraction). |
 | `VISION_PROVIDER` / `EXTRACTION_PROVIDER` | `evidence` / `rule_based` | `qwen`, `claude`, `vision_fields`. |

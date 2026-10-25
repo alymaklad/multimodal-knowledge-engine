@@ -14,7 +14,7 @@ class ExtractionCorrection(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
-    reel_id: Mapped[int] = mapped_column(ForeignKey("reels.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     content_type: Mapped[str] = mapped_column(String(64), index=True)
     field_name: Mapped[str] = mapped_column(String(128))
     previous_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)

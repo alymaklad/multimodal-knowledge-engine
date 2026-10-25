@@ -12,7 +12,7 @@ class SavedSearchCreate(BaseModel):
     content_type: str | None = Field(default=None, max_length=64)
     minimum_score: int = Field(default=1, ge=1)
     mode: SearchMode = "lexical"
-    creator: str | None = Field(default=None, max_length=255)
+    author: str | None = Field(default=None, max_length=255)
     topic: str | None = Field(default=None, max_length=255)
 
 

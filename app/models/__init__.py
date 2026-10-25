@@ -1,7 +1,7 @@
 from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualAnalysis
 from app.models.benchmark import BenchmarkPrediction, BenchmarkRun
 from app.models.evaluation import EvaluationCase, EvaluationStatus
-from app.models.collection import Collection
+from app.models.collection import Collection, CollectionSource
 from app.models.correction import ExtractionCorrection
 from app.models.embedding import ContentEmbedding
 from app.models.provenance import ProcessingProvenance
@@ -12,11 +12,12 @@ from app.models.task_dispatch import TaskDispatch
 from app.models.job import JobStatus, ProcessingJob
 from app.models.job_event import JobEvent
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.models.user import User
 
 __all__ = [
     "Collection",
+    "CollectionSource",
     "ExtractionCorrection",
     "ContentEmbedding",
     "ProcessingProvenance",
@@ -37,8 +38,9 @@ __all__ = [
     "MediaAssetKind",
     "OCRResult",
     "ProcessingJob",
-    "Reel",
-    "ReelStatus",
+    "Source",
+    "SourceKind",
+    "SourceStatus",
     "Transcript",
     "User",
     "VisualAnalysis",

@@ -7,7 +7,7 @@ Two modes, selected by `AUTH_REQUIRED`:
 - **on** — only a valid bearer token identifies a caller. `X-User-Id` is ignored entirely, because a
   header a client can set freely is not authentication.
 
-Collections, Reels, jobs, and every other resource are scoped by the resolved identity either way,
+Collections, sources, jobs, and every other resource are scoped by the resolved identity either way,
 so turning authentication on does not change any authorization logic — only who the caller is.
 """
 

@@ -12,13 +12,12 @@ from app.models.embedding import ContentEmbedding
 from app.models.job import JobStatus, ProcessingJob
 from app.models.media_asset import MediaAsset, MediaAssetKind
 from app.models.provenance import ProcessingProvenance
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.providers.answering import NO_EVIDENCE_ANSWER
 from app.providers.base import EvidenceChunk, ExtractionResult, OCRObservation, TranscriptionResult, VisionResult
-from app.providers.claude_answering import ClaudeAnswerProvider, ClaudeReportNarrator
+from app.providers.claude_answering import ClaudeAnswerProvider
 from app.providers.factory import get_answer_provider
-from app.services.reporting import UNNARRATED_SUMMARY, build_narrated_report
-from app.workers.pipeline import analyze_reel
+from app.workers.pipeline import analyze_source
 
 client = TestClient(app)
 
@@ -37,10 +36,11 @@ class FakeClaudeClient:
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(self._payload))])
 
 
-def _chunk(reel_id: int) -> EvidenceChunk:
+def _chunk(source_id: int) -> EvidenceChunk:
     return EvidenceChunk(
-        reel_id=reel_id,
-        instagram_url=f"https://www.instagram.com/reel/E{reel_id}/",
+        source_id=source_id,
+        title=f"Source E{source_id}",
+        origin_url=f"https://example.com/E{source_id}",
         content_type="transcript",
         text="Hybrid search fuses BM25 with dense retrieval.",
         score=0.8,
@@ -49,35 +49,35 @@ def _chunk(reel_id: int) -> EvidenceChunk:
 
 def test_claude_answering_sends_every_chunk_and_returns_citations() -> None:
     fake = FakeClaudeClient(
-        {"answer": "Two saved Reels explain hybrid search.", "grounded": True, "cited_reel_ids": [3, 7]}
+        {"answer": "Two saved sources explain hybrid search.", "grounded": True, "cited_source_ids": [3, 7]}
     )
     result = ClaudeAnswerProvider(client=fake).answer("Which videos explain hybrid search?", [_chunk(3), _chunk(7)])
 
     prompt = fake.requests[0]["messages"][0]["content"]
-    assert "[Reel 3]" in prompt and "[Reel 7]" in prompt
+    assert "[Source 3]" in prompt and "[Source 7]" in prompt
     assert "only the evidence above" in prompt
     assert "Never use outside knowledge" in fake.requests[0]["system"]
     assert result.grounded is True
-    assert result.cited_reel_ids == [3, 7]
+    assert result.cited_source_ids == [3, 7]
 
 
 def test_claude_answering_drops_a_citation_that_was_never_retrieved() -> None:
-    """A Reel id the retriever did not supply must not reach the caller as a source."""
-    fake = FakeClaudeClient({"answer": "Reel 99 covers it.", "grounded": True, "cited_reel_ids": [99]})
+    """A source id the retriever did not supply must not reach the caller as a source."""
+    fake = FakeClaudeClient({"answer": "Source 99 covers it.", "grounded": True, "cited_source_ids": [99]})
     result = ClaudeAnswerProvider(client=fake).answer("What about QLoRA?", [_chunk(3)])
     assert result.grounded is False
     assert result.answer == NO_EVIDENCE_ANSWER
 
 
 def test_claude_answering_keeps_only_the_retrieved_subset_of_citations() -> None:
-    fake = FakeClaudeClient({"answer": "Reel 3 covers it.", "grounded": True, "cited_reel_ids": [3, 99]})
+    fake = FakeClaudeClient({"answer": "Source 3 covers it.", "grounded": True, "cited_source_ids": [3, 99]})
     result = ClaudeAnswerProvider(client=fake).answer("What about hybrid search?", [_chunk(3)])
     assert result.grounded is True
-    assert result.cited_reel_ids == [3]
+    assert result.cited_source_ids == [3]
 
 
 def test_claude_answering_honours_its_own_ungrounded_verdict() -> None:
-    fake = FakeClaudeClient({"answer": "Nothing saved covers QLoRA.", "grounded": False, "cited_reel_ids": []})
+    fake = FakeClaudeClient({"answer": "Nothing saved covers QLoRA.", "grounded": False, "cited_source_ids": []})
     result = ClaudeAnswerProvider(client=fake).answer("What about QLoRA?", [_chunk(3)])
     assert result.grounded is False
     assert result.answer == "Nothing saved covers QLoRA."
@@ -102,65 +102,6 @@ def test_answer_provider_factory_rejects_an_unknown_name(monkeypatch) -> None:
     with pytest.raises(ValueError, match="Unsupported answer provider"):
         get_answer_provider()
     get_settings.cache_clear()
-
-
-def test_report_narration_receives_aggregates_not_reels() -> None:
-    """Section 45: the model summarises precomputed counts, never the videos themselves."""
-    collection_id = client.post("/api/collections", json={"name": "Narrated AI"}).json()["id"]
-    created = client.post(
-        "/api/reels",
-        json={"collection_id": collection_id, "instagram_url": "https://www.instagram.com/reel/NAR001/"},
-    )
-    reel_id = created.json()["reel_id"]
-    with SessionLocal() as db:
-        db.add(
-            Transcript(
-                reel_id=reel_id,
-                text="A very long transcript that must never be forwarded to the report model.",
-                language="en",
-                segments=[],
-                model="test",
-            )
-        )
-        db.add(
-            ExtractedContent(
-                reel_id=reel_id,
-                content_type="ai_knowledge",
-                data={"topic": "RAG", "technologies": ["Qdrant"]},
-                text_representation="topic: RAG",
-                confidence=0.9,
-            )
-        )
-        db.commit()
-
-    fake = FakeClaudeClient(
-        {"summary": "Mostly retrieval material.", "themes": ["RAG"], "observations": ["One creator dominates."]}
-    )
-    with SessionLocal() as db:
-        narrated = build_narrated_report(db, collection_id, narrator=ClaudeReportNarrator(client=fake))
-
-    prompt = fake.requests[0]["messages"][0]["content"]
-    assert "must never be forwarded" not in prompt
-    assert "top_topics" in prompt
-    assert narrated.narrated is True
-    assert narrated.summary == "Mostly retrieval material."
-    assert narrated.report.total_reels == 1
-
-
-def test_narrative_endpoint_returns_aggregates_when_no_narrator_is_configured() -> None:
-    collection_id = client.post("/api/collections", json={"name": "Unnarrated"}).json()["id"]
-    response = client.get(f"/api/reports/collections/{collection_id}/narrative")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["narrated"] is False
-    assert body["summary"] == UNNARRATED_SUMMARY
-    assert body["report"]["collection_id"] == collection_id
-
-
-def test_narrative_endpoint_is_owner_scoped() -> None:
-    collection_id = client.post("/api/collections", json={"name": "Owned"}).json()["id"]
-    other = {"X-User-Id": "someone-else"}
-    assert client.get(f"/api/reports/collections/{collection_id}/narrative", headers=other).status_code == 404
 
 
 class _Speech:
@@ -195,20 +136,22 @@ def test_analysis_records_the_model_set_that_produced_the_knowledge() -> None:
         collection = Collection(name="Provenance")
         db.add(collection)
         db.flush()
-        reel = Reel(
-            collection_id=collection.id,
-            instagram_url="upload://provenance.mp4",
+        source = Source(
+            user_id=collection.user_id,
+            kind=SourceKind.video,
+            title="upload://provenance.mp4",
+            collections=[collection],
             media_path="data/media/provenance.mp4",
-            status=ReelStatus.processing,
+            status=SourceStatus.processing,
             processing_version="v7",
         )
-        db.add(reel)
+        db.add(source)
         db.flush()
         db.add_all(
             [
-                MediaAsset(reel_id=reel.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"),
+                MediaAsset(source_id=source.id, kind=MediaAssetKind.audio, path="data/media/audio.wav"),
                 MediaAsset(
-                    reel_id=reel.id,
+                    source_id=source.id,
                     kind=MediaAssetKind.frame,
                     path="data/media/frame_00001.jpg",
                     sequence_number=1,
@@ -216,11 +159,11 @@ def test_analysis_records_the_model_set_that_produced_the_knowledge() -> None:
                 ),
             ]
         )
-        job = ProcessingJob(reel_id=reel.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
+        job = ProcessingJob(source_id=source.id, status=JobStatus.queued, current_stage="ocr_and_transcription")
         db.add(job)
         db.commit()
 
-        analyze_reel(
+        analyze_source(
             db,
             job.id,
             speech_provider=_Speech(),
@@ -228,15 +171,15 @@ def test_analysis_records_the_model_set_that_produced_the_knowledge() -> None:
             vision_provider=_Vision(),
             extraction_provider=_Extraction(),
         )
-        record = db.query(ProcessingProvenance).filter(ProcessingProvenance.reel_id == reel.id).one()
+        record = db.query(ProcessingProvenance).filter(ProcessingProvenance.source_id == source.id).one()
         assert record.processing_version == "v7"
         assert record.models["transcription_model"] == "fake-whisper-small"
         assert record.models["vision_model"] == "fake-vlm-v2"
         assert record.models["embedding_model"].startswith("local-hashing-v1")
         assert record.models["extraction_prompt_version"] == "v1"
-        reel_id = reel.id
+        source_id = source.id
 
-    analysis = client.get(f"/api/reels/{reel_id}/analysis")
+    analysis = client.get(f"/api/sources/{source_id}/analysis")
     assert analysis.status_code == 200
     assert analysis.json()["provenance"]["models"]["vision_model"] == "fake-vlm-v2"
 
@@ -244,18 +187,18 @@ def test_analysis_records_the_model_set_that_produced_the_knowledge() -> None:
 def test_reprocessing_clears_the_provenance_of_the_discarded_run() -> None:
     collection_id = client.post("/api/collections", json={"name": "Provenance reset"}).json()["id"]
     created = client.post(
-        "/api/reels",
-        json={"collection_id": collection_id, "instagram_url": "https://www.instagram.com/reel/PRV001/"},
+        "/api/sources/url",
+        json={"collection_id": collection_id, "url": "https://example.com/source/PRV001/"},
     )
-    reel_id = created.json()["reel_id"]
+    source_id = created.json()["source_id"]
     with SessionLocal() as db:
         db.add(
-            ProcessingProvenance(reel_id=reel_id, processing_version="v1", models={"vision_model": "stale"})
+            ProcessingProvenance(source_id=source_id, processing_version="v1", models={"vision_model": "stale"})
         )
-        db.add(VisualAnalysis(reel_id=reel_id, description="stale", analysis_json={}, model="stale"))
+        db.add(VisualAnalysis(source_id=source_id, description="stale", analysis_json={}, model="stale"))
         db.commit()
 
-    assert client.post(f"/api/reels/{reel_id}/reprocess").status_code == 202
+    assert client.post(f"/api/sources/{source_id}/reprocess").status_code == 202
     with SessionLocal() as db:
-        assert db.query(ProcessingProvenance).filter(ProcessingProvenance.reel_id == reel_id).count() == 0
-        assert db.query(ContentEmbedding).filter(ContentEmbedding.reel_id == reel_id).count() == 0
+        assert db.query(ProcessingProvenance).filter(ProcessingProvenance.source_id == source_id).count() == 0
+        assert db.query(ContentEmbedding).filter(ContentEmbedding.source_id == source_id).count() == 0

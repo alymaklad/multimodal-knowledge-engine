@@ -7,14 +7,13 @@ from app.db.database import Base
 
 
 class ContentEmbedding(Base):
-    """One embedded evidence chunk of a Reel, kept alongside the text it was generated from."""
+    """One embedded evidence chunk of a source, kept alongside the text it was generated from."""
 
     __tablename__ = "content_embeddings"
-    __table_args__ = (UniqueConstraint("reel_id", "chunk_key", name="uq_embedding_reel_chunk"),)
+    __table_args__ = (UniqueConstraint("source_id", "chunk_key", name="uq_embedding_source_chunk"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    reel_id: Mapped[int] = mapped_column(ForeignKey("reels.id"), index=True)
-    collection_id: Mapped[int] = mapped_column(ForeignKey("collections.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     chunk_key: Mapped[str] = mapped_column(String(128))
     content_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     text: Mapped[str] = mapped_column(Text)
@@ -23,4 +22,4 @@ class ContentEmbedding(Base):
     model: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    reel: Mapped["Reel"] = relationship(back_populates="embeddings")
+    source: Mapped["Source"] = relationship(back_populates="embeddings")

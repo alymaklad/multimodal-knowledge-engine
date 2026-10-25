@@ -24,7 +24,7 @@ class StageMetric(Base):
     __tablename__ = "stage_metrics"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    reel_id: Mapped[int] = mapped_column(ForeignKey("reels.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("processing_jobs.id"), nullable=True, index=True)
     stage: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[StageStatus] = mapped_column(Enum(StageStatus), index=True)
@@ -34,4 +34,4 @@ class StageMetric(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    reel: Mapped["Reel"] = relationship(back_populates="stage_metrics")
+    source: Mapped["Source"] = relationship(back_populates="stage_metrics")

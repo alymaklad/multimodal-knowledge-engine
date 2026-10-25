@@ -3,7 +3,7 @@
 Tesseract is tuned for scanned documents and does poorly on the text this project actually meets:
 stylised, animated, low-contrast captions burned into short vertical video. PP-OCR is trained on
 scene text and handles rotation, colour, and decorative fonts far better — which matters because on
-a silent Reel the on-screen text is the *only* source of sets and reps.
+a silent source the on-screen text is the *only* source of sets and reps.
 
 Two backends behind one provider, because installing PaddlePaddle on Windows is often painful:
 

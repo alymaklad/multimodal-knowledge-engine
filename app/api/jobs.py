@@ -6,8 +6,7 @@ from app.db.database import get_db
 from app.core.security import get_current_user_id
 from app.models.job import ProcessingJob
 from app.models.job_event import JobEvent
-from app.models.collection import Collection
-from app.models.reel import Reel
+from app.models.source import Source
 from app.models.task_dispatch import TaskDispatch
 from app.schemas.job import JobRead
 from app.schemas.job_event import JobEventRead
@@ -15,21 +14,20 @@ from app.schemas.dispatch import TaskDispatchRead
 from app.workers.celery_app import celery_app
 from app.services.dispatch import JobDispatchError, dispatch_media_preparation
 from app.services.authorization import get_owned_job
-from app.services.reprocessing import reset_reel_for_reprocessing
+from app.services.reprocessing import reset_source_for_reprocessing
 from app.services.jobs import record_job_event
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-@router.get("/reel/{reel_id}", response_model=JobRead)
-def get_reel_job(
-    reel_id: int, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+@router.get("/source/{source_id}", response_model=JobRead)
+def get_source_job(
+    source_id: int, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
 ) -> ProcessingJob:
     job = db.scalar(
         select(ProcessingJob)
-        .join(ProcessingJob.reel)
-        .join(Reel.collection)
-        .where(ProcessingJob.reel_id == reel_id, Collection.user_id == user_id)
+        .join(ProcessingJob.source)
+        .where(ProcessingJob.source_id == source_id, Source.user_id == user_id)
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Processing job not found")
@@ -61,7 +59,7 @@ def list_jobs(
     status_filter: str | None = None, offset: int = 0, limit: int = 50,
     db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
 ) -> list[ProcessingJob]:
-    query = select(ProcessingJob).join(ProcessingJob.reel).join(Reel.collection).where(Collection.user_id == user_id)
+    query = select(ProcessingJob).join(ProcessingJob.source).where(Source.user_id == user_id)
     if status_filter:
         query = query.where(ProcessingJob.status == status_filter)
     return list(db.scalars(query.order_by(ProcessingJob.created_at.desc()).offset(offset).limit(min(limit, 100))))
@@ -76,14 +74,14 @@ def dispatch_job(
         raise HTTPException(status_code=404, detail="Processing job not found")
     if job.current_stage != "ingestion":
         raise HTTPException(status_code=409, detail="Only new ingestion jobs can be dispatched for media preparation")
-    if not job.reel.media_path:
+    if not job.source.media_path:
         raise HTTPException(status_code=422, detail="A local media upload is required before this job can be dispatched")
     try:
         task_id = dispatch_media_preparation(job.id)
     except JobDispatchError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     record_job_event(db, job_id=job.id, stage="ingestion", event_type="dispatched", message=f"Celery task {task_id}")
-    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="reels.prepare_media"))
+    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.prepare_media"))
     db.commit()
     return {"job_id": job.id, "task_id": task_id, "message": "Media preparation queued"}
 
@@ -118,12 +116,12 @@ def retry_job(job_id: int, db: Session = Depends(get_db), user_id: str = Depends
         raise HTTPException(status_code=404, detail="Processing job not found")
     if job.status.value not in {"failed", "needs_review"}:
         raise HTTPException(status_code=409, detail="Only failed or review-required jobs can be retried")
-    reset_reel_for_reprocessing(db, job.reel)
+    reset_source_for_reprocessing(db, job.source)
     try:
         task_id = dispatch_media_preparation(job.id)
     except JobDispatchError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     record_job_event(db, job_id=job.id, stage="ingestion", event_type="dispatched", message=f"Retry task {task_id}")
-    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="reels.prepare_media"))
+    db.add(TaskDispatch(job_id=job.id, task_id=task_id, task_name="sources.prepare_media"))
     db.commit()
     return {"job_id": job.id, "task_id": task_id, "message": "Job requeued"}

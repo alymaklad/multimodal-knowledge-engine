@@ -23,17 +23,17 @@ def test_static_assets_are_served() -> None:
     assert client.get("/app/static/style.css").status_code == 200
 
 
-def test_collection_listing_carries_reel_counts_without_a_request_per_collection() -> None:
+def test_collection_listing_carries_source_counts_without_a_request_per_collection() -> None:
     owner = {"X-User-Id": "counting-owner"}
     empty = client.post("/api/collections", json={"name": "Empty one"}, headers=owner).json()["id"]
     filled = client.post("/api/collections", json={"name": "Filled one"}, headers=owner).json()["id"]
     for suffix in ("CNT1", "CNT2"):
         client.post(
-            "/api/reels",
-            json={"collection_id": filled, "instagram_url": f"https://www.instagram.com/reel/{suffix}/"},
+            "/api/sources/url",
+            json={"collection_id": filled, "url": f"https://example.com/source/{suffix}/"},
             headers=owner,
         )
 
     listing = {item["id"]: item for item in client.get("/api/collections", headers=owner).json()}
-    assert listing[empty]["reel_count"] == 0
-    assert listing[filled]["reel_count"] == 2
+    assert listing[empty]["source_count"] == 0
+    assert listing[filled]["source_count"] == 2

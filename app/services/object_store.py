@@ -7,9 +7,9 @@ worker on another host can fetch.
 
 Layout follows architecture section 8:
 
-    users/{user_id}/reels/{reel_id}/video.mp4
-    users/{user_id}/reels/{reel_id}/audio.wav
-    users/{user_id}/reels/{reel_id}/frames/frame_00001.jpg
+    users/{user_id}/sources/{source_id}/video.mp4
+    users/{user_id}/sources/{source_id}/audio.wav
+    users/{user_id}/sources/{source_id}/frames/frame_00001.jpg
 """
 
 from __future__ import annotations
@@ -41,12 +41,12 @@ class StoredObjectInfo:
     backend: str
 
 
-def reel_prefix(user_id: str, reel_id: int) -> str:
-    return f"users/{user_id}/reels/{reel_id}"
+def source_prefix(user_id: str, source_id: int) -> str:
+    return f"users/{user_id}/sources/{source_id}"
 
 
-def object_key(user_id: str, reel_id: int, name: str) -> str:
-    return f"{reel_prefix(user_id, reel_id)}/{name}"
+def object_key(user_id: str, source_id: int, name: str) -> str:
+    return f"{source_prefix(user_id, source_id)}/{name}"
 
 
 def content_type_for(path: Path) -> str:

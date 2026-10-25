@@ -17,7 +17,7 @@ class StoredObjectRead(BaseModel):
 
 
 class PublishResponse(BaseModel):
-    reel_id: int
+    source_id: int
     backend: str
     published: int
     skipped: int

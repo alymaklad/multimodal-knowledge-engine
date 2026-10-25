@@ -23,8 +23,9 @@ def answer_collection_question(
     retrieved = retrieve_evidence(db, collection_id=collection_id, query=question, limit=limit, content_type=content_type)
     chunks = [
         EvidenceChunk(
-            reel_id=item.reel_id,
-            instagram_url=item.instagram_url,
+            source_id=item.source_id,
+            title=item.title,
+            origin_url=item.origin_url,
             content_type=item.content_type,
             text=item.text,
             score=item.score,
@@ -32,17 +33,18 @@ def answer_collection_question(
         for item in retrieved
     ]
     grounded = (provider or get_answer_provider()).answer(question, chunks)
-    cited = set(grounded.cited_reel_ids)
+    cited = set(grounded.cited_source_ids)
     sources = [
         AnswerSource(
-            reel_id=chunk.reel_id,
-            instagram_url=chunk.instagram_url,
+            source_id=chunk.source_id,
+            title=chunk.title,
+            origin_url=chunk.origin_url,
             content_type=chunk.content_type,
             score=chunk.score,
             snippet=chunk.text[:300],
         )
         for chunk in chunks
-        if not cited or chunk.reel_id in cited
+        if not cited or chunk.source_id in cited
     ]
     return AnswerResponse(
         question=question,

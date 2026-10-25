@@ -107,7 +107,7 @@ def build_anthropic_client() -> Any:
 
 
 def select_frames(frame_paths: list[Path], limit: int) -> list[Path]:
-    """Evenly spaced frames spanning the whole Reel.
+    """Evenly spaced frames spanning the whole source.
 
     A movement cannot be identified from one frame (section 21), and the first N frames would only
     cover the opening seconds. Even spacing keeps the sampled sequence representative of the clip.
@@ -155,7 +155,7 @@ class ClaudeVisionProvider(VisionProvider):
         frames = select_frames(frame_paths, self._max_frames)
         if not frames:
             return VisionResult(
-                description="No frames were sampled from this Reel, so no visual analysis is possible.",
+                description="No frames were sampled from this source, so no visual analysis is possible.",
                 analysis={"frame_count": 0, "evidence": {}},
                 confidence=0.0,
                 model=f"{self._model}-vision",

@@ -15,10 +15,8 @@ from sqlalchemy import text
 from app.api.collections import router as collections_router
 from app.api.analysis import router as analysis_router
 from app.api.jobs import router as jobs_router
-from app.api.reels import router as reels_router
+from app.api.sources import router as sources_router
 from app.api.search import router as search_router
-from app.api.reporting import router as reporting_router
-from app.api.workouts import router as workouts_router
 from app.api.system import router as system_router
 from app.api.metadata import router as metadata_router
 from app.api.evaluations import router as evaluations_router
@@ -27,7 +25,7 @@ from app.api.corrections import router as corrections_router
 from app.api.facets import router as facets_router
 from app.api.saved_searches import router as saved_searches_router
 from app.api.knowledge import router as knowledge_router
-from app.api.knowledge import reel_router as knowledge_reel_router
+from app.api.knowledge import source_router as knowledge_source_router
 from app.api.media import router as media_router
 from app.api.auth import router as auth_router
 from app.db.database import Base, SessionLocal, engine
@@ -46,7 +44,7 @@ Base.metadata.create_all(bind=engine)
 async def lifespan(_app: FastAPI):
     """Pick up work a previous run left in flight.
 
-    In-process work does not survive a restart, so without this a Reel uploaded moments before one
+    In-process work does not survive a restart, so without this a source uploaded moments before one
     would sit queued with nothing coming to collect it. Celery has its own durable queue and needs
     no equivalent, so this is a no-op unless TASK_RUNNER is local.
     """
@@ -65,9 +63,9 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="Multimodal Personal Knowledge Engine",
+    title="Multimodal Knowledge Engine",
     version="0.1.0",
-    description="Phase 1 API for ingesting Instagram Reel references into collections.",
+    description="Build collections from a library of multimodal sources and ask questions answered from them, with citations.",
 )
 cors_origins = [origin.strip() for origin in get_settings().cors_origins.split(",") if origin.strip()]
 if cors_origins:
@@ -75,10 +73,8 @@ if cors_origins:
 app.include_router(collections_router)
 app.include_router(analysis_router)
 app.include_router(jobs_router)
-app.include_router(reels_router)
+app.include_router(sources_router)
 app.include_router(search_router)
-app.include_router(reporting_router)
-app.include_router(workouts_router)
 app.include_router(system_router)
 app.include_router(metadata_router)
 app.include_router(benchmarks_router)
@@ -87,7 +83,7 @@ app.include_router(corrections_router)
 app.include_router(facets_router)
 app.include_router(saved_searches_router)
 app.include_router(knowledge_router)
-app.include_router(knowledge_reel_router)
+app.include_router(knowledge_source_router)
 app.include_router(media_router)
 app.include_router(auth_router)
 

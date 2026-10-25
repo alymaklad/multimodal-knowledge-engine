@@ -1,4 +1,4 @@
-"""Publish a Reel's media to durable object storage after preparation."""
+"""Publish a source's media to durable object storage after preparation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.media_asset import MediaAsset, MediaAssetKind
-from app.models.reel import Reel
+from app.models.source import Source
 from app.models.stored_object import StoredObject, StoredObjectKind
 from app.services.object_store import ObjectStore, get_object_store, object_key
 
@@ -21,37 +21,37 @@ class PublishResult:
     backend: str
 
 
-def publish_reel_media(db: Session, reel: Reel, *, store: ObjectStore | None = None) -> PublishResult:
+def publish_source_media(db: Session, source: Source, *, store: ObjectStore | None = None) -> PublishResult:
     """Copy the source video, audio, and frames into the object store under the section 8 layout.
 
-    Republishing replaces the Reel's prior object records, so a reprocessed Reel never accumulates
+    Republishing replaces the source's prior object records, so a reprocessed source never accumulates
     entries pointing at frames a newer run has already overwritten.
     """
     store = store or get_object_store()
-    user_id = reel.collection.user_id
-    assets = list(db.scalars(select(MediaAsset).where(MediaAsset.reel_id == reel.id)))
+    user_id = source.user_id
+    assets = list(db.scalars(select(MediaAsset).where(MediaAsset.source_id == source.id)))
 
     planned: list[tuple[StoredObjectKind, Path, str, int | None]] = []
-    if reel.media_path:
-        source = Path(reel.media_path)
+    if source.media_path:
+        media_file = Path(source.media_path)
         planned.append(
-            (StoredObjectKind.video, source, object_key(user_id, reel.id, f"video{source.suffix or '.mp4'}"), None)
+            (StoredObjectKind.video, media_file, object_key(user_id, source.id, f"video{media_file.suffix or '.mp4'}"), None)
         )
     for asset in assets:
         path = Path(asset.path)
         if asset.kind == MediaAssetKind.audio:
-            planned.append((StoredObjectKind.audio, path, object_key(user_id, reel.id, f"audio{path.suffix or '.wav'}"), None))
+            planned.append((StoredObjectKind.audio, path, object_key(user_id, source.id, f"audio{path.suffix or '.wav'}"), None))
         elif asset.kind == MediaAssetKind.frame:
             planned.append(
                 (
                     StoredObjectKind.frame,
                     path,
-                    object_key(user_id, reel.id, f"frames/{path.name}"),
+                    object_key(user_id, source.id, f"frames/{path.name}"),
                     asset.sequence_number,
                 )
             )
 
-    db.execute(delete(StoredObject).where(StoredObject.reel_id == reel.id))
+    db.execute(delete(StoredObject).where(StoredObject.source_id == source.id))
     published = 0
     skipped = 0
     for kind, local_path, key, sequence_number in planned:
@@ -62,7 +62,7 @@ def publish_reel_media(db: Session, reel: Reel, *, store: ObjectStore | None = N
         info = store.put(local_path, key)
         db.add(
             StoredObject(
-                reel_id=reel.id,
+                source_id=source.id,
                 kind=kind,
                 storage_key=info.key,
                 backend=info.backend,

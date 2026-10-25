@@ -103,7 +103,7 @@ def _workout_text(data: dict[str, object]) -> str:
 
 def _extract_ai_knowledge(evidence: str) -> dict[str, object] | None:
     # Word boundaries, not substrings: plain containment matched "RAG" inside "leverage" on a real
-    # Reel and invented a topic the video never mentioned.
+    # source and invented a topic the video never mentioned.
     terms = [
         term
         for term in ("RAG", "BM25", "Qdrant", "LoRA", "embeddings", "hybrid search")

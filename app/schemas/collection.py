@@ -18,6 +18,16 @@ class CollectionRead(CollectionCreate):
     created_at: datetime
     updated_at: datetime
     # Included so a client listing collections does not need one count request per collection.
-    reel_count: int = 0
+    source_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CollectionSourcesAdd(BaseModel):
+    source_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class CollectionSourcesAdded(BaseModel):
+    collection_id: int
+    added: list[int]
+    source_count: int

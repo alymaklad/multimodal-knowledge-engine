@@ -21,7 +21,7 @@ class EvaluationCase(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
     collection_id: Mapped[int | None] = mapped_column(ForeignKey("collections.id"), nullable=True)
-    reel_id: Mapped[int | None] = mapped_column(ForeignKey("reels.id"), nullable=True)
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True)
     category: Mapped[str] = mapped_column(String(64), default="general")
     ground_truth: Mapped[dict[str, Any]] = mapped_column(JSON)
     prediction: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

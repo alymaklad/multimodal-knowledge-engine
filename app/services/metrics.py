@@ -1,30 +1,28 @@
 from collections import Counter
 from math import ceil
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.collection import Collection
 from app.models.job import ProcessingJob
-from app.models.reel import Reel
+from app.models.source import Source
 from app.models.stage_metric import StageMetric, StageStatus
 from app.schemas.system import PipelineMetrics, StageLatency, UserMetrics
 
 
 def get_user_metrics(db: Session, user_id: str) -> UserMetrics:
-    collection_ids = list(db.scalars(select(Collection.id).where(Collection.user_id == user_id)))
-    if not collection_ids:
-        return UserMetrics(collections=0, reels_by_status={}, jobs_by_status={}, review_queue_size=0)
-    reels = list(db.scalars(select(Reel).where(Reel.collection_id.in_(collection_ids))))
-    reel_statuses = Counter(reel.status.value for reel in reels)
-    reel_ids = [reel.id for reel in reels]
-    jobs = list(db.scalars(select(ProcessingJob).where(ProcessingJob.reel_id.in_(reel_ids)))) if reel_ids else []
+    collection_count = db.scalar(select(func.count(Collection.id)).where(Collection.user_id == user_id)) or 0
+    sources = list(db.scalars(select(Source).where(Source.user_id == user_id)))
+    source_statuses = Counter(source.status.value for source in sources)
+    source_ids = [source.id for source in sources]
+    jobs = list(db.scalars(select(ProcessingJob).where(ProcessingJob.source_id.in_(source_ids)))) if source_ids else []
     job_statuses = Counter(job.status.value for job in jobs)
     return UserMetrics(
-        collections=len(collection_ids),
-        reels_by_status=dict(reel_statuses),
+        collections=collection_count,
+        sources_by_status=dict(source_statuses),
         jobs_by_status=dict(job_statuses),
-        review_queue_size=reel_statuses.get("needs_review", 0),
+        review_queue_size=source_statuses.get("needs_review", 0),
     )
 
 
@@ -33,14 +31,11 @@ STAGE_ORDER = ["transcription", "ocr", "vision", "extraction"]
 
 def get_pipeline_metrics(db: Session, user_id: str) -> PipelineMetrics:
     """Aggregate per-stage latency and failure rates across the user's analysis runs."""
-    collection_ids = list(db.scalars(select(Collection.id).where(Collection.user_id == user_id)))
-    if not collection_ids:
-        return PipelineMetrics(analyzed_reels=0, degraded_reels=0, stages=[])
-    reel_ids = list(db.scalars(select(Reel.id).where(Reel.collection_id.in_(collection_ids))))
-    if not reel_ids:
-        return PipelineMetrics(analyzed_reels=0, degraded_reels=0, stages=[])
+    source_ids = list(db.scalars(select(Source.id).where(Source.user_id == user_id)))
+    if not source_ids:
+        return PipelineMetrics(analyzed_sources=0, degraded_sources=0, stages=[])
 
-    metrics = list(db.scalars(select(StageMetric).where(StageMetric.reel_id.in_(reel_ids))))
+    metrics = list(db.scalars(select(StageMetric).where(StageMetric.source_id.in_(source_ids))))
     by_stage: dict[str, list[StageMetric]] = {}
     for metric in metrics:
         by_stage.setdefault(metric.stage, []).append(metric)
@@ -69,10 +64,10 @@ def get_pipeline_metrics(db: Session, user_id: str) -> PipelineMetrics:
             )
         )
 
-    degraded_reels = len({entry.reel_id for entry in metrics if entry.status is StageStatus.failed})
+    degraded_sources = len({entry.source_id for entry in metrics if entry.status is StageStatus.failed})
     return PipelineMetrics(
-        analyzed_reels=len({entry.reel_id for entry in metrics}),
-        degraded_reels=degraded_reels,
+        analyzed_sources=len({entry.source_id for entry in metrics}),
+        degraded_sources=degraded_sources,
         stages=stages,
     )
 

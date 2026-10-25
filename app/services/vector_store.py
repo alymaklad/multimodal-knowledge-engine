@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from abc import ABC, abstractmethod
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,8 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class VectorPoint:
-    reel_id: int
-    collection_id: int
+    source_id: int
     chunk_key: str
     text: str
     vector: list[float]
@@ -30,7 +30,7 @@ class VectorPoint:
 
 @dataclass(frozen=True)
 class VectorMatch:
-    reel_id: int
+    source_id: int
     chunk_key: str
     content_type: str | None
     text: str
@@ -41,15 +41,16 @@ class VectorStore(ABC):
     """Storage boundary so Qdrant can replace the relational baseline without touching callers."""
 
     @abstractmethod
-    def replace_reel(self, points: list[VectorPoint], *, reel_id: int) -> None: ...
+    def replace_source(self, points: list[VectorPoint], *, source_id: int) -> None: ...
 
     @abstractmethod
-    def delete_reel(self, reel_id: int) -> None: ...
+    def delete_source(self, source_id: int) -> None: ...
 
     @abstractmethod
     def search(
-        self, *, collection_id: int, vector: list[float], limit: int, content_type: str | None = None
-    ) -> list[VectorMatch]: ...
+        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
+    ) -> list[VectorMatch]:
+        """Nearest chunks among the given sources; a collection is searched by passing its members."""
 
 
 class DatabaseVectorStore(VectorStore):
@@ -63,13 +64,12 @@ class DatabaseVectorStore(VectorStore):
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def replace_reel(self, points: list[VectorPoint], *, reel_id: int) -> None:
-        self._db.execute(delete(ContentEmbedding).where(ContentEmbedding.reel_id == reel_id))
+    def replace_source(self, points: list[VectorPoint], *, source_id: int) -> None:
+        self._db.execute(delete(ContentEmbedding).where(ContentEmbedding.source_id == source_id))
         for point in points:
             self._db.add(
                 ContentEmbedding(
-                    reel_id=point.reel_id,
-                    collection_id=point.collection_id,
+                    source_id=point.source_id,
                     chunk_key=point.chunk_key,
                     content_type=point.content_type,
                     text=point.text,
@@ -79,13 +79,15 @@ class DatabaseVectorStore(VectorStore):
                 )
             )
 
-    def delete_reel(self, reel_id: int) -> None:
-        self._db.execute(delete(ContentEmbedding).where(ContentEmbedding.reel_id == reel_id))
+    def delete_source(self, source_id: int) -> None:
+        self._db.execute(delete(ContentEmbedding).where(ContentEmbedding.source_id == source_id))
 
     def search(
-        self, *, collection_id: int, vector: list[float], limit: int, content_type: str | None = None
+        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
     ) -> list[VectorMatch]:
-        statement = select(ContentEmbedding).where(ContentEmbedding.collection_id == collection_id)
+        if not source_ids:
+            return []
+        statement = select(ContentEmbedding).where(ContentEmbedding.source_id.in_(list(source_ids)))
         if content_type is not None:
             statement = statement.where(ContentEmbedding.content_type == content_type)
         matches = []
@@ -100,7 +102,7 @@ class DatabaseVectorStore(VectorStore):
                 continue
             matches.append(
                 VectorMatch(
-                    reel_id=row.reel_id,
+                    source_id=row.source_id,
                     chunk_key=row.chunk_key,
                     content_type=row.content_type,
                     text=row.text,
@@ -110,16 +112,15 @@ class DatabaseVectorStore(VectorStore):
         if stale:
             logger.warning(
                 "Ignoring %s embedding rows whose dimension does not match the current provider; "
-                "reindex this collection with POST /api/collections/%s/index",
+                "reindex with POST /api/collections/{id}/index",
                 stale,
-                collection_id,
             )
         ranked = [match for match in matches if match.score > 0.0]
-        return sorted(ranked, key=lambda match: (-match.score, match.reel_id, match.chunk_key))[:limit]
+        return sorted(ranked, key=lambda match: (-match.score, match.source_id, match.chunk_key))[:limit]
 
 
 class QdrantVectorStore(VectorStore):
-    """Qdrant-backed store using collection-scoped payload filters, per the architecture."""
+    """Qdrant-backed store using source-scoped payload filters."""
 
     def __init__(self, dimensions: int, *, db: Session | None = None) -> None:
         try:
@@ -144,21 +145,20 @@ class QdrantVectorStore(VectorStore):
             vectors_config=self._models.VectorParams(size=dimensions, distance=self._models.Distance.COSINE),
         )
 
-    def replace_reel(self, points: list[VectorPoint], *, reel_id: int) -> None:  # pragma: no cover
-        self.delete_reel(reel_id)
+    def replace_source(self, points: list[VectorPoint], *, source_id: int) -> None:  # pragma: no cover
+        self.delete_source(source_id)
         if self._db is not None:
-            DatabaseVectorStore(self._db).replace_reel(points, reel_id=reel_id)
+            DatabaseVectorStore(self._db).replace_source(points, source_id=source_id)
         if not points:
             return
         self._client.upsert(
             collection_name=self._collection,
             points=[
                 self._models.PointStruct(
-                    id=_point_id(point.reel_id, point.chunk_key),
+                    id=_point_id(point.source_id, point.chunk_key),
                     vector=point.vector,
                     payload={
-                        "reel_id": point.reel_id,
-                        "collection_id": point.collection_id,
+                        "source_id": point.source_id,
                         "chunk_key": point.chunk_key,
                         "content_type": point.content_type,
                         "text": point.text,
@@ -169,23 +169,25 @@ class QdrantVectorStore(VectorStore):
             ],
         )
 
-    def delete_reel(self, reel_id: int) -> None:  # pragma: no cover - requires a server
+    def delete_source(self, source_id: int) -> None:  # pragma: no cover - requires a server
         if self._db is not None:
-            DatabaseVectorStore(self._db).delete_reel(reel_id)
+            DatabaseVectorStore(self._db).delete_source(source_id)
         self._client.delete(
             collection_name=self._collection,
             points_selector=self._models.FilterSelector(
                 filter=self._models.Filter(
-                    must=[self._models.FieldCondition(key="reel_id", match=self._models.MatchValue(value=reel_id))]
+                    must=[self._models.FieldCondition(key="source_id", match=self._models.MatchValue(value=source_id))]
                 )
             ),
         )
 
     def search(  # pragma: no cover - requires a server
-        self, *, collection_id: int, vector: list[float], limit: int, content_type: str | None = None
+        self, *, source_ids: Collection[int], vector: list[float], limit: int, content_type: str | None = None
     ) -> list[VectorMatch]:
+        if not source_ids:
+            return []
         conditions = [
-            self._models.FieldCondition(key="collection_id", match=self._models.MatchValue(value=collection_id))
+            self._models.FieldCondition(key="source_id", match=self._models.MatchAny(any=list(source_ids)))
         ]
         if content_type is not None:
             conditions.append(
@@ -200,7 +202,7 @@ class QdrantVectorStore(VectorStore):
         )
         return [
             VectorMatch(
-                reel_id=int(point.payload["reel_id"]),
+                source_id=int(point.payload["source_id"]),
                 chunk_key=str(point.payload.get("chunk_key", "")),
                 content_type=point.payload.get("content_type"),
                 text=str(point.payload.get("text", "")),
@@ -219,7 +221,7 @@ def get_vector_store(db: Session, *, dimensions: int) -> VectorStore:
     raise ValueError(f"Unsupported vector store: {name}")
 
 
-def _point_id(reel_id: int, chunk_key: str) -> str:
+def _point_id(source_id: int, chunk_key: str) -> str:
     from uuid import NAMESPACE_URL, uuid5
 
-    return str(uuid5(NAMESPACE_URL, f"reel/{reel_id}/{chunk_key}"))
+    return str(uuid5(NAMESPACE_URL, f"source/{source_id}/{chunk_key}"))

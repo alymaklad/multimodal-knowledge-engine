@@ -4,7 +4,7 @@ This must run before anything imports `app.db.database`, which builds its engine
 import time. pytest loads `conftest.py` before collecting test modules, so setting the environment
 here is what makes the suite use a throwaway database instead of the developer's own.
 
-Without this the suite ran against `data/instagram_knowledge.db` and accumulated rows across every
+Without this the suite ran against the developer's own database and accumulated rows across every
 run, which quietly makes any aggregate assertion depend on how many times pytest had been invoked.
 """
 

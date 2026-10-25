@@ -7,7 +7,7 @@ from app.models.job import JobStatus
 
 class JobRead(BaseModel):
     id: int
-    reel_id: int
+    source_id: int
     status: JobStatus
     current_stage: str
     attempt_count: int

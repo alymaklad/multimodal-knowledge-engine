@@ -28,7 +28,7 @@ class RoutingDecision:
 def classify_complexity(
     *, frame_count: int, has_transcript: bool, has_ocr_text: bool
 ) -> RoutingDecision:
-    """Decide which tier a Reel needs before any model is called."""
+    """Decide which tier a source needs before any model is called."""
     settings = get_settings()
     if frame_count > settings.routing_simple_max_frames:
         return RoutingDecision(

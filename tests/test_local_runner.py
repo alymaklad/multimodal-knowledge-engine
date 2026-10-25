@@ -10,7 +10,7 @@ from app.db.database import SessionLocal
 from app.main import app
 from app.models.collection import Collection
 from app.models.job import JobStatus, ProcessingJob
-from app.models.reel import Reel, ReelStatus
+from app.models.source import Source, SourceKind, SourceStatus
 from app.services import local_runner
 from app.services.dispatch import JobDispatchError, dispatch_media_preparation
 
@@ -22,16 +22,18 @@ def _seed(name: str, *, media: bool = True, stage: str = "ingestion") -> int:
         collection = Collection(name=name, user_id="runner-owner")
         db.add(collection)
         db.flush()
-        reel = Reel(
-            collection_id=collection.id,
-            instagram_url=f"upload://{name}.mp4",
+        source = Source(
+            user_id=collection.user_id,
+            kind=SourceKind.video,
+            title=f"upload://{name}.mp4",
+            collections=[collection],
             media_path=f"data/test-run/media/{name}.mp4" if media else None,
-            status=ReelStatus.pending,
+            status=SourceStatus.pending,
             processing_version="v1",
         )
-        db.add(reel)
+        db.add(source)
         db.flush()
-        job = ProcessingJob(reel_id=reel.id, status=JobStatus.queued, current_stage=stage)
+        job = ProcessingJob(source_id=source.id, status=JobStatus.queued, current_stage=stage)
         db.add(job)
         db.commit()
         return job.id
@@ -114,8 +116,8 @@ def test_resume_requeues_unfinished_jobs() -> None:
         local_runner.submit = original
 
 
-def test_resume_skips_reels_with_no_media() -> None:
-    """A URL-only Reel can never progress; queueing it would spin the worker forever."""
+def test_resume_skips_sources_with_no_media() -> None:
+    """A URL-only Source can never progress; queueing it would spin the worker forever."""
     job_id = _seed("runner-url-only", media=False)
     submitted: list[int] = []
     original = local_runner.submit
@@ -148,8 +150,8 @@ def test_resume_skips_jobs_that_already_finished() -> None:
 def test_resume_recovers_a_job_that_died_during_analysis() -> None:
     """A worker killed inside the analysis stage leaves the job at `running` on that stage.
 
-    Until this was covered, such a job was never re-queued: the Reel sat at `processing` with
-    nothing coming to collect it, spinning in the interface forever. Observed on a real Reel whose
+    Until this was covered, such a job was never re-queued: the source sat at `processing` with
+    nothing coming to collect it, spinning in the interface forever. Observed on a real source whose
     vision stage exhausted the GPU, not hypothesised.
     """
     job_id = _seed("runner-died-in-analysis", stage="multimodal_analysis")
@@ -177,7 +179,7 @@ def test_a_resumed_analysis_job_actually_reruns_the_stage(monkeypatch) -> None:
 
     job_id = _seed("runner-reruns-analysis", stage="multimodal_analysis")
     analysed: list[int] = []
-    monkeypatch.setattr(pipeline, "analyze_reel", lambda db, jid, **kwargs: analysed.append(jid))
+    monkeypatch.setattr(pipeline, "analyze_source", lambda db, jid, **kwargs: analysed.append(jid))
 
     local_runner._process(job_id)
 

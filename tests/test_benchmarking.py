@@ -8,7 +8,7 @@ client = TestClient(app)
 
 OWNER = {"X-User-Id": "benchmark-owner"}
 
-# The section 55 experiment: silent workout Reels whose sets and reps exist only as on-screen text.
+# The section 55 experiment: silent workout Sources whose sets and reps exist only as on-screen text.
 SILENT_CASES = [
     {"exercise": "Bulgarian Split Squat", "sets": 3, "reps": "10 each leg"},
     {"exercise": "Barbell Back Squat", "sets": 4, "reps": "8-10"},

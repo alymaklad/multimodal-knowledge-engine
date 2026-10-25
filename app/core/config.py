@@ -11,7 +11,7 @@ _EPHEMERAL_SECRET: str | None = None
 class Settings(BaseSettings):
     """Runtime configuration loaded from environment variables or `.env`."""
 
-    database_url: str = "sqlite:///./data/instagram_knowledge.db"
+    database_url: str = "sqlite:///./data/multimodal_knowledge.db"
     processing_version: str = "v1"
     media_root: str = "./data/media"
     max_upload_bytes: int = 100 * 1024 * 1024
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     vector_store: str = "database"
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
-    qdrant_collection: str = "reel_content"
+    qdrant_collection: str = "source_content"
     vision_provider: str = "evidence"
     extraction_provider: str = "rule_based"
     anthropic_model: str = "claude-opus-5"

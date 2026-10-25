@@ -18,8 +18,9 @@ def test_extractive_answer_refuses_without_evidence() -> None:
 def test_extractive_answer_only_quotes_supplied_evidence() -> None:
     evidence = [
         EvidenceChunk(
-            reel_id=7,
-            instagram_url="https://www.instagram.com/reel/RAG001/",
+            source_id=7,
+            title="RAG explainer",
+            origin_url="https://example.com/source/RAG001/",
             content_type="transcript",
             text="Retrieval augmented generation grounds answers in retrieved documents. Unrelated aside.",
             score=0.9,
@@ -27,22 +28,22 @@ def test_extractive_answer_only_quotes_supplied_evidence() -> None:
     ]
     result = ExtractiveAnswerProvider().answer("How does retrieval augmented generation work?", evidence)
     assert result.grounded is True
-    assert result.cited_reel_ids == [7]
-    assert "https://www.instagram.com/reel/RAG001/" in result.answer
+    assert result.cited_source_ids == [7]
+    assert "RAG explainer" in result.answer
     assert "Retrieval augmented generation grounds answers" in result.answer
 
 
 def test_ask_endpoint_returns_grounded_answer_with_sources() -> None:
     collection_id = client.post("/api/collections", json={"name": "RAG"}).json()["id"]
     created = client.post(
-        "/api/reels",
-        json={"collection_id": collection_id, "instagram_url": "https://www.instagram.com/reel/RAG010/"},
+        "/api/sources/url",
+        json={"collection_id": collection_id, "url": "https://example.com/source/RAG010/"},
     )
-    reel_id = created.json()["reel_id"]
+    source_id = created.json()["source_id"]
     with SessionLocal() as db:
         db.add(
             Transcript(
-                reel_id=reel_id,
+                source_id=source_id,
                 text="Hybrid search fuses BM25 keyword matching with dense vector retrieval before reranking.",
                 language="en",
                 segments=[],
@@ -51,7 +52,7 @@ def test_ask_endpoint_returns_grounded_answer_with_sources() -> None:
         )
         db.add(
             ExtractedContent(
-                reel_id=reel_id,
+                source_id=source_id,
                 content_type="ai_knowledge",
                 data={"topic": "hybrid search"},
                 text_representation="topic: hybrid search. technologies: BM25",
@@ -68,8 +69,8 @@ def test_ask_endpoint_returns_grounded_answer_with_sources() -> None:
     body = answered.json()
     assert body["grounded"] is True
     assert body["sources"]
-    assert {source["reel_id"] for source in body["sources"]} == {reel_id}
-    assert "instagram.com/reel/RAG010" in body["answer"]
+    assert {source["source_id"] for source in body["sources"]} == {source_id}
+    assert "example.com/source/RAG010" in body["answer"]
 
 
 def test_ask_endpoint_reports_no_evidence_for_an_empty_collection() -> None:

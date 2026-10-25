@@ -4,12 +4,14 @@ from typing import Any
 from pydantic import BaseModel
 
 
-class CollectionExportReel(BaseModel):
+class CollectionExportSource(BaseModel):
     id: int
-    instagram_url: str
+    kind: str
+    title: str
+    origin_url: str | None
     status: str
-    creator_username: str | None
-    caption: str | None
+    author: str | None
+    description: str | None
     extracted_content: list[dict[str, Any]]
 
 
@@ -17,4 +19,4 @@ class CollectionExport(BaseModel):
     collection_id: int
     name: str
     exported_at: datetime
-    reels: list[CollectionExportReel]
+    sources: list[CollectionExportSource]

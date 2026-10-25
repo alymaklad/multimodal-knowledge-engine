@@ -22,10 +22,10 @@ class StoredObject(Base):
     """
 
     __tablename__ = "stored_objects"
-    __table_args__ = (UniqueConstraint("reel_id", "storage_key", name="uq_stored_object_reel_key"),)
+    __table_args__ = (UniqueConstraint("source_id", "storage_key", name="uq_stored_object_source_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    reel_id: Mapped[int] = mapped_column(ForeignKey("reels.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     kind: Mapped[StoredObjectKind] = mapped_column(Enum(StoredObjectKind), index=True)
     storage_key: Mapped[str] = mapped_column(String(1024))
     backend: Mapped[str] = mapped_column(String(32))
@@ -34,4 +34,4 @@ class StoredObject(Base):
     sequence_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    reel: Mapped["Reel"] = relationship(back_populates="stored_objects")
+    source: Mapped["Source"] = relationship(back_populates="stored_objects")

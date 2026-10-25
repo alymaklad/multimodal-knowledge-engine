@@ -12,8 +12,8 @@ _STOPWORDS = {
 }
 
 NO_EVIDENCE_ANSWER = (
-    "No saved Reel in this collection contains evidence for that question. "
-    "Ingest and analyse more Reels, or rephrase the question using terms that appear in them."
+    "No saved source in this collection contains evidence for that question. "
+    "Add and analyse more sources, or rephrase the question using terms that appear in them."
 )
 
 
@@ -21,7 +21,7 @@ class ExtractiveAnswerProvider(AnswerProvider):
     """Answers by quoting retrieved evidence, so nothing outside the collection can be asserted.
 
     An LLM provider implementing the same contract can replace this; the guarantee to preserve is
-    that every sentence in the answer traces back to a cited Reel.
+    that every sentence in the answer traces back to a cited source.
     """
 
     model = "local-extractive-v1"
@@ -36,19 +36,19 @@ class ExtractiveAnswerProvider(AnswerProvider):
             sentence = _best_sentence(chunk.text, terms)
             if not sentence:
                 continue
-            if chunk.reel_id not in cited:
-                cited.append(chunk.reel_id)
-            lines.append(f"- Reel {chunk.reel_id} ({chunk.instagram_url}): {sentence}")
+            if chunk.source_id not in cited:
+                cited.append(chunk.source_id)
+            lines.append(f"- Source {chunk.source_id} ({chunk.title}): {sentence}")
             if len(lines) >= 5:
                 break
         if not lines:
             return GroundedAnswer(answer=NO_EVIDENCE_ANSWER, grounded=False, model=self.model)
         body = "\n".join(lines)
         return GroundedAnswer(
-            answer=f"Based only on the saved Reels in this collection:\n{body}",
+            answer=f"Based only on the saved sources in this collection:\n{body}",
             grounded=True,
             model=self.model,
-            cited_reel_ids=cited,
+            cited_source_ids=cited,
         )
 
 
