@@ -32,7 +32,7 @@ class BrokenSpeech:
 
 class GoodOCR:
     def extract(self, frame_paths) -> list[OCRObservation]:
-        return [OCRObservation(frame_path=str(frame_paths[0]), text="3 sets of 10", confidence=0.9)]
+        return [OCRObservation(frame_path=str(frame_paths[0]), text="k = 60 on slide 3", confidence=0.9)]
 
 
 class BrokenOCR:
@@ -42,7 +42,7 @@ class BrokenOCR:
 
 class GoodVision:
     def analyze_video(self, _frames, _transcript, _ocr) -> VisionResult:
-        return VisionResult(description="A person performs a split squat.", model="fake-vlm", confidence=0.9)
+        return VisionResult(description="A speaker presents a slide about search.", model="fake-vlm", confidence=0.9)
 
 
 class BrokenVision:
@@ -59,9 +59,9 @@ class GoodExtraction:
     def extract(self, _vision, _transcript, _ocr) -> list[ExtractionResult]:
         return [
             ExtractionResult(
-                content_type="workout_exercise",
-                data={"exercise": "Split Squat", "evidence": {"exercise": "ocr"}},
-                text_representation="Split Squat",
+                content_type="key_points",
+                data={"topic": "Hybrid Search", "evidence": {"topic": "ocr"}},
+                text_representation="Topic: Hybrid Search.",
                 confidence=0.95,
             )
         ]
@@ -125,8 +125,8 @@ def test_failed_transcription_does_not_discard_the_ocr_and_vision_result() -> No
         assert _stage(outcome, "transcription").status is StageStatus.failed
         assert "whisper weights" in _stage(outcome, "transcription").error_message
         assert _stage(outcome, "ocr").status is StageStatus.succeeded
-        assert outcome.ocr_text == "3 sets of 10"
-        assert outcome.extractions[0].data["exercise"] == "Split Squat"
+        assert outcome.ocr_text == "k = 60 on slide 3"
+        assert outcome.extractions[0].data["topic"] == "Hybrid Search"
         assert db.query(OCRResult).filter(OCRResult.source_id == source.id).count() == 1
         assert db.query(VisualAnalysis).filter(VisualAnalysis.source_id == source.id).count() == 1
 

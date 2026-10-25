@@ -86,8 +86,8 @@ def test_video_evidence_keeps_its_timestamps() -> None:
     ocr = [
         SimpleNamespace(id=index, text="3 x 12 EACH LEG", timestamp_seconds=float(index)) for index in range(3)
     ] + [SimpleNamespace(id=9, text="REST 60s", timestamp_seconds=5.0)]
-    visual = SimpleNamespace(description="A person performs a split squat.")
-    extracted = [SimpleNamespace(content_type="workout_exercise", text_representation="Split squat 3x12")]
+    visual = SimpleNamespace(description="A speaker presents a slide about search.")
+    extracted = [SimpleNamespace(content_type="key_points", text_representation="Topic: rank fusion.")]
     chunks = {chunk.chunk_key: chunk for chunk in build_chunks(_source(transcript=transcript, ocr=ocr, visual=visual, extracted=extracted))}
 
     assert chunks["transcript:1"].text == "Brace your core. Drive up."
@@ -96,7 +96,7 @@ def test_video_evidence_keeps_its_timestamps() -> None:
     assert chunks["ocr:1"].text == "3 x 12 EACH LEG\nREST 60s"
     assert chunks["ocr:1"].locator == {"start": 0.0, "end": 5.0}
     assert chunks["visual:1"].content_type == "visual"
-    assert chunks["extracted:workout_exercise"].content_type == "workout_exercise"
+    assert chunks["extracted:key_points"].content_type == "key_points"
     assert "Title: Doc" in chunks["summary"].text
 
 

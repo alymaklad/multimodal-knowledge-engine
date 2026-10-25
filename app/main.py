@@ -3,11 +3,7 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from pathlib import Path
-
 from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -144,16 +140,6 @@ async def request_correlation(request: Request, call_next):
         },
     )
     return response
-
-
-STATIC_ROOT = Path(__file__).resolve().parent / "web" / "static"
-app.mount("/app/static", StaticFiles(directory=STATIC_ROOT), name="static")
-
-
-@app.get("/app", include_in_schema=False)
-def web_app() -> FileResponse:
-    """The single-page client. It talks to the same public API as any other consumer."""
-    return FileResponse(STATIC_ROOT / "index.html")
 
 
 @app.get("/health", tags=["system"])

@@ -98,7 +98,7 @@ def test_hybrid_search_applies_the_supplied_reranker() -> None:
             db.add(
                 ExtractedContent(
                     source_id=source_id,
-                    content_type="ai_knowledge",
+                    content_type="key_points",
                     data={"topic": "hybrid search"},
                     text_representation=text,
                     confidence=0.9,

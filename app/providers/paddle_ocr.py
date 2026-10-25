@@ -1,9 +1,9 @@
 """PP-OCR based text detection and recognition.
 
-Tesseract is tuned for scanned documents and does poorly on the text this project actually meets:
-stylised, animated, low-contrast captions burned into short vertical video. PP-OCR is trained on
-scene text and handles rotation, colour, and decorative fonts far better — which matters because on
-a silent source the on-screen text is the *only* source of sets and reps.
+Tesseract is tuned for scanned documents and does poorly on much of the text this project meets:
+stylised, animated, low-contrast captions burned into video, and text in photos and slides. PP-OCR
+is trained on scene text and handles rotation, colour, and decorative fonts far better - which
+matters because in a silent video the on-screen text is the *only* record of what it says.
 
 Two backends behind one provider, because installing PaddlePaddle on Windows is often painful:
 

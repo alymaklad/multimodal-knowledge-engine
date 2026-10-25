@@ -123,7 +123,7 @@ class _Extraction:
     def extract(self, _vision, _transcript, _ocr) -> list[ExtractionResult]:
         return [
             ExtractionResult(
-                content_type="ai_knowledge",
+                content_type="key_points",
                 data={"topic": "RAG", "evidence": {"topic": "ocr"}},
                 text_representation="topic: RAG",
                 confidence=0.95,

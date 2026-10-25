@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.core.config import get_settings
 from app.providers.base import (
+    KEY_POINTS_CONTENT_TYPE,
     ExtractionProvider,
     ExtractionResult,
     OCRObservation,
@@ -10,6 +11,7 @@ from app.providers.base import (
     VisionProvider,
     VisionResult,
 )
+from app.providers.structured_extraction import key_points_text
 
 
 class TesseractOCRProvider(OCRProvider):
@@ -52,64 +54,49 @@ class EvidenceVisionProvider(VisionProvider):
 
 
 class RuleBasedExtractionProvider(ExtractionProvider):
-    """Deterministic evidence-first MVP extraction; stronger LLM providers implement the same contract."""
+    """Deterministic key points without a model: the evidence's own words, never a paraphrase.
+
+    On-screen text lines and the opening sentences of the transcript become the key points, each
+    attributed to where it was read. Nothing is inferred, so there is no topic and no entity list;
+    a model provider fills those. The confidence sits between the review thresholds, so secondary
+    verification checks every point against the stored evidence before the record is accepted.
+    """
 
     def extract(self, vision: VisionResult, transcript: str, ocr_text: str) -> list[ExtractionResult]:
-        evidence = "\n".join(part for part in [transcript, ocr_text, vision.description] if part)
-        results: list[ExtractionResult] = []
-        workout = _extract_workout(evidence)
-        if workout:
-            results.append(
-                ExtractionResult(
-                    content_type="workout_exercise",
-                    data=workout,
-                    text_representation=_workout_text(workout),
-                    confidence=0.7,
-                )
+        points: list[str] = []
+        sources: list[str] = []
+        for line in _distinct(ocr_text.splitlines()):
+            points.append(line)
+            sources.append("ocr")
+        for sentence in _distinct(_SENTENCE_END.split(transcript)):
+            if len(points) >= MAX_KEY_POINTS:
+                break
+            points.append(sentence)
+            sources.append("transcript")
+        points = points[:MAX_KEY_POINTS]
+        if not points:
+            return []
+        evidence = "ocr" if sources[0] == "ocr" else "transcript"
+        data = {"topic": None, "key_points": points, "entities": [], "evidence": {"key_points": evidence}}
+        return [
+            ExtractionResult(
+                content_type=KEY_POINTS_CONTENT_TYPE,
+                data=data,
+                text_representation=key_points_text(data),
+                confidence=0.7,
             )
-        ai_knowledge = _extract_ai_knowledge(evidence)
-        if ai_knowledge:
-            results.append(
-                ExtractionResult(
-                    content_type="ai_knowledge",
-                    data=ai_knowledge,
-                    text_representation=evidence[:2000],
-                    confidence=0.6,
-                )
-            )
-        return results
+        ]
 
 
-def _extract_workout(evidence: str) -> dict[str, object] | None:
-    exercise_match = re.search(r"(?:exercise|workout)\s*[:\-]?\s*([A-Za-z][A-Za-z ]{2,60})", evidence, re.I)
-    sets_reps = re.search(r"\b(\d{1,2})\s*(?:sets?|x)\s*(\d{1,3}(?:\s*[-–]\s*\d{1,3})?(?:\s*(?:reps?|each leg))?)", evidence, re.I)
-    if not exercise_match and not sets_reps:
-        return None
-    # Every value below is read literally out of the evidence text, so its source is recorded.
-    data: dict[str, object] = {"exercise": exercise_match.group(1).strip() if exercise_match else "Unspecified exercise"}
-    evidence_map = {"exercise": "ocr" if exercise_match else "inferred"}
-    if sets_reps:
-        data["sets"] = int(sets_reps.group(1))
-        data["reps"] = sets_reps.group(2).strip()
-        evidence_map["sets"] = "ocr"
-        evidence_map["reps"] = "ocr"
-    data["evidence"] = evidence_map
-    return data
+MAX_KEY_POINTS = 8
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
-def _workout_text(data: dict[str, object]) -> str:
-    return ". ".join(f"{key}: {value}" for key, value in data.items() if key != "evidence")
-
-
-def _extract_ai_knowledge(evidence: str) -> dict[str, object] | None:
-    # Word boundaries, not substrings: plain containment matched "RAG" inside "leverage" on a real
-    # source and invented a topic the video never mentioned.
-    terms = [
-        term
-        for term in ("RAG", "BM25", "Qdrant", "LoRA", "embeddings", "hybrid search")
-        if re.search(rf"\b{re.escape(term)}\b", evidence, re.I)
-    ]
-    if not terms:
-        return None
-    topic = "hybrid search" if "hybrid search" in [term.lower() for term in terms] else terms[0]
-    return {"topic": topic, "technologies": terms, "evidence": {"topic": "ocr", "technologies": "ocr"}}
+def _distinct(lines: list[str]) -> list[str]:
+    """Non-trivial lines in first-seen order; a caption repeated on every frame counts once."""
+    seen: dict[str, None] = {}
+    for line in lines:
+        text = " ".join(line.split())
+        if len(text) >= 4 and text.lower() not in {existing.lower() for existing in seen}:
+            seen.setdefault(text, None)
+    return list(seen)

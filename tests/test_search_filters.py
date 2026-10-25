@@ -17,8 +17,8 @@ def _seed(collection_id: int, url: str, author: str, topic: str, text: str) -> i
         db.add(
             ExtractedContent(
                 source_id=source_id,
-                content_type="ai_knowledge",
-                data={"topic": topic, "technologies": []},
+                content_type="key_points",
+                data={"topic": topic, "entities": []},
                 text_representation=f"topic: {topic}. {text}",
                 confidence=0.9,
             )

@@ -53,9 +53,9 @@ def test_ask_endpoint_returns_grounded_answer_with_sources() -> None:
         db.add(
             ExtractedContent(
                 source_id=source_id,
-                content_type="ai_knowledge",
+                content_type="key_points",
                 data={"topic": "hybrid search"},
-                text_representation="topic: hybrid search. technologies: BM25",
+                text_representation="topic: hybrid search. entities: BM25",
                 confidence=0.8,
             )
         )

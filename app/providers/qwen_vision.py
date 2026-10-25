@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 REPETITION_PENALTY = 1.05
 
 SYSTEM_PROMPT = (
-    "You analyse short vertical videos for a personal knowledge base. You report only what the "
+    "You analyse videos for a personal knowledge base. You report only what the "
     "supplied evidence shows. A missing value is always better than a guessed one. "
     "Reply with a single JSON object and nothing else."
 )
@@ -198,7 +198,7 @@ def _instruction(transcript: str, ocr_text: str) -> str:
     ocr_text = _fit_to_budget(ocr_text, settings.vlm_max_ocr_chars, "on-screen text")
     transcript = _fit_to_budget(transcript, settings.vlm_max_transcript_chars, "transcript")
     return (
-        "The frames above are sampled in order from one short video.\n\n"
+        "The frames above are sampled in order from one video.\n\n"
         "ON-SCREEN TEXT (OCR):\n" + (ocr_text or "(none detected)") + "\n\n"
         "TRANSCRIPT:\n" + (transcript or "(this video has no speech)") + "\n\n"
         "Describe what happens across the frames as a sequence, then fill in only the fields the "
@@ -218,19 +218,9 @@ def _instruction(transcript: str, ocr_text: str) -> str:
 _FIELD_GUIDE = "\n".join(
     [
         '  "description": string - what happens across the frames, in order',
-        '  "content_kind": one of "workout", "ai_technical", "other"',
-        '  "exercise": string or null',
-        '  "equipment": array of strings',
-        '  "target_muscles": array of strings',
-        '  "sets": integer or null',
-        '  "reps": string or null',
-        '  "duration_seconds": number or null',
-        '  "rest_seconds": number or null',
-        '  "tempo": string or null - only if explicitly stated',
-        '  "technique_notes": array of strings',
-        '  "warnings": array of strings',
-        '  "topic": string or null - for non-workout content',
-        '  "technologies": array of strings',
+        '  "topic": string or null - what the video is about, in a few words',
+        '  "key_points": array of strings - the main things it shows or says, one claim each',
+        '  "entities": array of strings - people, products, tools, places, or terms it names',
         '  "evidence": object mapping each field you filled to one of '
         '"visual", "ocr", "transcript", "metadata", "inferred"',
         '  "confidence": number between 0 and 1',

@@ -1,13 +1,12 @@
 """Extraction that reads the vision model's structured fields instead of re-parsing its prose.
 
-A vision-language model already returns `exercise`, `sets`, `reps`, `equipment` and the rest as
-typed fields. The rule-based extractor then threw those away and ran regexes over the description
-text, which produced records like `exercise: "performed by an animated character"` — a sentence
-fragment lifted out of a caption. Reading the fields directly removes a lossy round-trip through
-English.
+A vision-language model already returns `topic`, `key_points` and `entities` as typed fields.
+Re-deriving them with patterns over the description text would throw that structure away and
+produce fragments lifted out of captions. Reading the fields directly removes a lossy round-trip
+through English.
 
 **Evidence tags are re-derived, not trusted.** Observed with Qwen2.5-VL-3B: it labelled every field
-`visual`, including reps that came from on-screen text and a technique note quoted verbatim from the
+`visual`, including values that came from on-screen text and points quoted verbatim from the
 transcript. Since the OCR and transcript text are both available here, each value is checked against
 them and attributed to where it can actually be found. The model's own claim is only used when
 neither corroborates it — and then it is downgraded to `inferred`, because a value nothing
@@ -19,23 +18,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.providers.base import ExtractionProvider, ExtractionResult, VisionResult
+from app.providers.base import (
+    KEY_POINT_FIELDS,
+    KEY_POINTS_CONTENT_TYPE,
+    ExtractionProvider,
+    ExtractionResult,
+    VisionResult,
+)
 
 logger = logging.getLogger(__name__)
-
-WORKOUT_FIELDS = (
-    "exercise",
-    "sets",
-    "reps",
-    "equipment",
-    "target_muscles",
-    "technique_notes",
-    "tempo",
-    "duration_seconds",
-    "rest_seconds",
-    "warnings",
-)
-AI_FIELDS = ("topic", "technologies")
 
 # Short values match too easily by accident ("3" appears in almost any transcript), so corroboration
 # is only claimed for values long enough for the match to mean something.
@@ -46,28 +37,16 @@ class VisionFieldExtractionProvider(ExtractionProvider):
     """Turn the vision model's typed fields into structured records."""
 
     def __init__(self, fallback: ExtractionProvider | None = None) -> None:
-        # Local/evidence vision providers return only a description; those still need the regexes.
+        # Local/evidence vision providers return only a description; those use the deterministic extractor.
         self._fallback = fallback
 
     def extract(self, vision: VisionResult, transcript: str, ocr_text: str) -> list[ExtractionResult]:
         analysis = vision.analysis or {}
         claimed = analysis.get("evidence") if isinstance(analysis.get("evidence"), dict) else {}
 
-        records: list[ExtractionResult] = []
-        workout = _subset(analysis, WORKOUT_FIELDS)
-        if workout.get("exercise"):
-            records.append(
-                _record("workout_exercise", workout, claimed, transcript, ocr_text, vision, _workout_text)
-            )
-
-        knowledge = _subset(analysis, AI_FIELDS)
-        if knowledge.get("topic") or knowledge.get("technologies"):
-            records.append(
-                _record("ai_knowledge", knowledge, claimed, transcript, ocr_text, vision, _knowledge_text)
-            )
-
-        if records:
-            return records
+        fields = _subset(analysis, KEY_POINT_FIELDS)
+        if fields:
+            return [_record(KEY_POINTS_CONTENT_TYPE, fields, claimed, transcript, ocr_text, vision, key_points_text)]
 
         # Nothing structured came back — fall through rather than returning an empty result, so a
         # local vision provider still yields whatever the deterministic patterns can find.
@@ -145,32 +124,17 @@ def _subset(analysis: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]
     }
 
 
-def _workout_text(fields: dict[str, Any]) -> str:
+def key_points_text(fields: dict[str, Any]) -> str:
     """Readable sentences, because this string is what gets embedded and shown as evidence."""
-    parts = [f"{fields['exercise']}."]
-    if fields.get("sets"):
-        parts.append(f"{fields['sets']} sets.")
-    if fields.get("reps"):
-        parts.append(f"{fields['reps']} repetitions.")
-    if fields.get("target_muscles"):
-        parts.append("Targets " + _join(fields["target_muscles"]) + ".")
-    if fields.get("equipment"):
-        parts.append("Uses " + _join(fields["equipment"]) + ".")
-    if fields.get("tempo"):
-        parts.append(f"Tempo: {fields['tempo']}.")
-    if fields.get("technique_notes"):
-        parts.append("Technique: " + "; ".join(str(note) for note in fields["technique_notes"]) + ".")
-    if fields.get("warnings"):
-        parts.append("Warnings: " + "; ".join(str(item) for item in fields["warnings"]) + ".")
-    return " ".join(parts)
-
-
-def _knowledge_text(fields: dict[str, Any]) -> str:
     parts = []
     if fields.get("topic"):
         parts.append(f"Topic: {fields['topic']}.")
-    if fields.get("technologies"):
-        parts.append("Technologies: " + _join(fields["technologies"]) + ".")
+    for point in fields.get("key_points") or []:
+        text = str(point).strip()
+        if text:
+            parts.append(text if text.endswith((".", "!", "?")) else f"{text}.")
+    if fields.get("entities"):
+        parts.append("Mentions " + _join(fields["entities"]) + ".")
     return " ".join(parts)
 
 

@@ -217,3 +217,19 @@ def test_upload_without_a_collection_lands_in_the_library_only() -> None:
     assert response.status_code == 202
     library = {item["id"] for item in client.get("/api/sources", params={"kind": "video"}).json()}
     assert response.json()["source_id"] in library
+
+
+def test_collection_listing_carries_source_counts_without_a_request_per_collection() -> None:
+    owner = {"X-User-Id": "counting-owner"}
+    empty = client.post("/api/collections", json={"name": "Empty one"}, headers=owner).json()["id"]
+    filled = client.post("/api/collections", json={"name": "Filled one"}, headers=owner).json()["id"]
+    for suffix in ("CNT1", "CNT2"):
+        client.post(
+            "/api/sources/url",
+            json={"collection_id": filled, "url": f"https://example.com/source/{suffix}/"},
+            headers=owner,
+        )
+
+    listing = {item["id"]: item for item in client.get("/api/collections", headers=owner).json()}
+    assert listing[empty]["source_count"] == 0
+    assert listing[filled]["source_count"] == 2

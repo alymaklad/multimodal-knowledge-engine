@@ -1257,3 +1257,23 @@ source scoping, ownership, cascade on collection delete, the busy check, failure
 disconnect persistence, citation resolution, and both model providers against fake clients (request
 shape, fallback and effort parameters, stop-reason handling, Ollama NDJSON and error mapping). Not
 verified against live models: neither Claude nor Ollama was called.
+
+## Completed — phase 6: cleanup of the Instagram-era assumptions (2026-10-26)
+
+- **Video extraction is domain-neutral.** The vision schema's workout and AI-concept fields
+  (exercise, sets, reps, equipment, muscles, technologies, `content_kind`) are replaced by
+  `topic`, `key_points`, and `entities`, and extraction yields one `key_points` record per video.
+  The Claude extraction schema now constrains the record's `data` to exactly those fields plus the
+  evidence map. The field extractor keeps its evidence re-derivation (OCR spacing tolerance, minimum
+  corroboration length); the rule-based extractor uses the evidence's own words (distinct on-screen
+  lines, then transcript sentences) and infers nothing. Prompts say "videos", not "short vertical
+  videos", including the local Qwen field guide. Facets report topics and entities. Confidence
+  routing, the review queue, corrections, evaluations, and benchmarks were already field-generic
+  and are unchanged.
+- **The Reels-era web UI is gone** (`app/web/static`, the `/app` route, its tests). `run.bat` opens
+  `/docs` instead. A new frontend is to be built separately.
+- **Docs rewritten.** README describes the product as it is; HOW_IT_WORKS is a technical guide to
+  the new pipeline, retrieval, and chat. The original architecture specification and this file stay
+  as history.
+- Test fixtures that used workout data were converted to generic examples, so the suite reads like
+  the product it tests.

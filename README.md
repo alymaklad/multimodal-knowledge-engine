@@ -1,517 +1,344 @@
 # Multimodal Knowledge Engine
 
-A FastAPI service in the spirit of NotebookLM: add documents, web pages, images, audio, and video
-to a personal library, group them into collections, and ask questions that are answered only from
-the sources in a collection, with citations.
+A FastAPI backend for a personal research notebook, in the spirit of NotebookLM. You add documents,
+web pages, YouTube videos, images, audio, and video to a library, group them into collections, and
+ask questions. The answers come only from the sources in the collection, and every claim cites the
+passage it came from: "p. 4", "12:30–13:45", "§ Setup".
 
-> **Migration in progress.** The project started as an engine for Instagram Reels and is being
-> generalised to any source type. Sources now live in a per-user library and a collection is a
-> selection over it (`POST /api/sources/url`, `POST /api/sources/upload`, `POST /api/sources/text`,
-> `POST /api/collections/{id}/sources`). Uploads of documents (PDF, DOCX, TXT, Markdown), images,
-> audio, and video are accepted and verified by content; web pages and YouTube transcripts are
-> fetched by the worker. Each kind has a processor that splits it into segments with a locator (page,
-> section, or time range): PDFs (with OCR for scanned pages), Word documents, text and Markdown, web
-> pages, YouTube captions, images (OCR, plus a description with `VISION_PROVIDER=claude`), and audio
-> (with a `SPEECH_PROVIDER`). Segments are packed into overlapping chunks that keep their location,
-> lexical search is BM25 over those chunks, and search results and answers say where each passage
-> is ("p. 4", "12:30–13:45", "§ Setup"). Search and `/ask` accept `source_ids` to use only some of
-> a collection's sources. Each collection has conversations (`/api/collections/{id}/conversations`,
-> `/api/conversations/{id}/messages[/stream]`): follow-ups are rewritten into standalone queries,
-> answers stream as Server-Sent Events, and inline `[n]` markers resolve to the exact passages
-> cited. `CHAT_PROVIDER` picks `extractive` (no model), `claude`, or `ollama` (local). The sections
-> below still describe the original video pipeline.
+One rule runs through the whole design: **every answer must be traceable to the evidence that
+produced it.** Passages keep their location in the source, answers cite passages rather than whole
+sources, and a citation the model invents is removed instead of shown.
 
-The video pipeline turns saved short-form videos into a searchable,
-evidence-backed knowledge base. Each video goes through FFmpeg preparation, then speech
-transcription, OCR, multi-frame vision analysis, and structured extraction. The results are
-embedded per modality for lexical, semantic, and hybrid retrieval, and questions are answered only
-from retrieved evidence, with citations.
-
-One rule runs through the whole design: **every value the system shows must be traceable to the
-evidence that produced it.** Extracted fields are tagged with their source modality. Confidence
-decides whether a human needs to look. Every analysed Reel records the exact model set that
-produced its knowledge.
-
-> Further reading: [HOW_IT_WORKS.md](HOW_IT_WORKS.md) is a long-form technical and user guide.
-> [instagram_multimodal_knowledge_engine_architecture.md](instagram_multimodal_knowledge_engine_architecture.md)
-> is the original architecture specification, and [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
-> tracks the implementation against it.
+> There is no frontend yet; the API is the interface (`/docs` serves an interactive reference).
+> [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the internals in depth.
+> [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) records how the system was built, phase by
+> phase. The project began as an engine for Instagram Reels;
+> [the original architecture](instagram_multimodal_knowledge_engine_architecture.md) is kept for
+> history.
 
 ---
 
 ## Contents
 
-1. [Architecture](#architecture)
-2. [Processing pipeline](#processing-pipeline)
-3. [Provider abstraction](#provider-abstraction)
-4. [Confidence routing and verification](#confidence-routing-and-verification)
-5. [Indexing and retrieval](#indexing-and-retrieval)
-6. [Grounded answering and reports](#grounded-answering-and-reports)
-7. [Data model](#data-model)
-8. [Storage](#storage)
-9. [Task execution](#task-execution)
-10. [Security](#security)
-11. [Observability and resilience](#observability-and-resilience)
-12. [Evaluation and benchmarking](#evaluation-and-benchmarking)
-13. [API surface](#api-surface)
-14. [Web interface](#web-interface)
-15. [Configuration](#configuration)
-16. [Running](#running)
-17. [Testing](#testing)
-18. [Project layout](#project-layout)
-19. [Limitations](#limitations)
+1. [What it does](#what-it-does)
+2. [Architecture](#architecture)
+3. [Sources and collections](#sources-and-collections)
+4. [Processing](#processing)
+5. [Chunking and retrieval](#chunking-and-retrieval)
+6. [The chatbot](#the-chatbot)
+7. [Providers](#providers)
+8. [Storage, tasks, and migrations](#storage-tasks-and-migrations)
+9. [Security and operations](#security-and-operations)
+10. [API overview](#api-overview)
+11. [Configuration](#configuration)
+12. [Running](#running)
+13. [Testing](#testing)
+14. [Project layout](#project-layout)
+15. [Limitations](#limitations)
+
+---
+
+## What it does
+
+```text
+add a source ──▶ fetch or verify ──▶ process into located segments ──▶ chunk ──▶ index
+  file, link,      web page, YouTube       pages, sections,               overlapping,   BM25 +
+  pasted text      transcript, upload      time windows, image text        located        vectors
+                                                                                            │
+ask in a conversation ──▶ rewrite the follow-up ──▶ hybrid retrieval ──▶ streamed answer ◀──┘
+                          using the history         over the chosen       citing [1], [2] …
+                                                    sources               resolved to passages
+```
+
+- **A shared library.** Sources belong to you, not to a collection. A collection is a selection
+  over your library, so one source can be in many collections and is processed only once.
+- **Every common format.** PDF (with OCR for scanned pages), Word, text, Markdown, web pages,
+  YouTube captions, images (OCR plus an optional description), audio (transcribed), and video
+  (transcript, on-screen text, and visual analysis).
+- **Located citations.** Search results and answers name the page, section, or moment they quote.
+- **Conversations.** Follow-up questions are understood in context, answers stream as they are
+  written, and a conversation can be limited to some of a collection's sources.
+- **Your choice of model.** Answers can come from no model at all (quoted passages), Claude, or a
+  local model through Ollama.
 
 ---
 
 ## Architecture
 
 ```text
-                 ┌────────────────────────────────────────────────────────────┐
-  Browser  ───▶  │  FastAPI (app/main.py)                                     │
-  /app SPA       │   middleware: request-id correlation, rate limiting, CORS  │
-  curl / API     │   routers:    app/api/*  →  services: app/services/*       │
-                 └───────────────┬───────────────────────────┬────────────────┘
-                                 │ 202 Accepted + job row     │ search / ask / reports
-                                 ▼                            ▼
-                 ┌──────────────────────────────┐   ┌──────────────────────────┐
-                 │ Task runner                   │   │ Retrieval                │
-                 │  TASK_RUNNER=celery → Redis   │   │  lexical · dense · RRF   │
-                 │  TASK_RUNNER=local  → thread  │   │  → optional reranker     │
-                 └───────────────┬───────────────┘   └────────────┬─────────────┘
-                                 ▼                                │
-                 ┌──────────────────────────────┐                 │
-                 │ Pipeline (app/workers)        │                 │
-                 │  1. media_preparation (FFmpeg)│                 │
-                 │  2. multimodal_analysis       │──── embeds ────▶│
-                 │     speech · OCR · vision ·   │                 │
-                 │     extraction                │                 │
-                 │  3. indexing · provenance ·   │                 │
-                 │     confidence verification   │                 │
-                 └───────────────┬───────────────┘                 │
-                                 ▼                                 ▼
-        ┌──────────────────┐ ┌──────────────────┐ ┌───────────────────────────┐
-        │ SQL database      │ │ Object store      │ │ Vector store              │
-        │ SQLite / Postgres │ │ local disk / S3   │ │ SQL table / Qdrant        │
-        └──────────────────┘ └──────────────────┘ └───────────────────────────┘
+                 ┌──────────────────────────────────────────────────────────────┐
+  Client  ────▶  │  FastAPI (app/main.py)                                        │
+  (API, /docs)   │   request ids · rate limiting · CORS · migrations at startup │
+                 │   routers app/api/*  ──▶  services app/services/*            │
+                 └──────────────┬──────────────────────────────┬────────────────┘
+                                │ 202 Accepted + job            │ search, ask, chat (SSE)
+                                ▼                               ▼
+                 ┌──────────────────────────────┐   ┌──────────────────────────────┐
+                 │ Task runner                   │   │ Retrieval                    │
+                 │  TASK_RUNNER=celery → Redis   │   │  BM25 + dense, fused per     │
+                 │  TASK_RUNNER=local  → thread  │   │  chunk, reranked             │
+                 └──────────────┬───────────────┘   └──────────────┬───────────────┘
+                                ▼                                  │
+                 ┌──────────────────────────────┐                  │
+                 │ Pipeline (app/workers)        │                  │
+                 │  route by kind: fetch links,  │                  │
+                 │  prepare video, or extract    │──── chunks ─────▶│
+                 │  content with a processor     │                  │
+                 └──────────────┬───────────────┘                  │
+                                ▼                                  ▼
+       ┌───────────────────┐ ┌───────────────────┐ ┌──────────────────────────────┐
+       │ SQL database       │ │ Object store       │ │ Vector store                 │
+       │ SQLite / Postgres  │ │ local disk / S3    │ │ SQL table / Qdrant           │
+       │ (Alembic)          │ │                    │ │                              │
+       └───────────────────┘ └───────────────────┘ └──────────────────────────────┘
 ```
-
-The code is split into four layers:
 
 | Layer | Package | Responsibility |
 |---|---|---|
-| HTTP | `app/api` | Routing, validation (Pydantic schemas in `app/schemas`), ownership checks. Holds no business logic. |
-| Services | `app/services` | Ingestion, analysis orchestration, indexing, retrieval, RAG, reporting, storage, evaluation. |
-| Providers | `app/providers` | Swappable model implementations behind abstract contracts, chosen by configuration in `factory.py`. |
-| Persistence | `app/models`, `app/db` | SQLAlchemy 2.0 ORM models; SQLite by default, PostgreSQL via `DATABASE_URL`. |
+| HTTP | `app/api` | Routing, validation (`app/schemas`), ownership checks. No business logic. |
+| Services | `app/services` | Ingestion, fetching, chunking, retrieval, chat, storage, evaluation. |
+| Processors | `app/processors` | One per kind of content: turn a stored file into located segments. |
+| Providers | `app/providers` | Swappable models behind contracts, chosen by configuration in `factory.py`. |
+| Persistence | `app/models`, `app/db` | SQLAlchemy 2.0 models; schema versioned with Alembic. |
 
-The HTTP request never runs the pipeline. Ingestion writes a durable `ProcessingJob` row and
-returns `202 Accepted`. The work happens later in a worker, either a Celery process or an
-in-process background thread.
+The HTTP request never processes a source. Adding one stores it and a durable `ProcessingJob`,
+returns `202 Accepted`, and a worker does the rest.
 
 ---
 
-## Processing pipeline
+## Sources and collections
 
-### Ingestion
-
-- `POST /api/reels/upload` takes a `.mp4`, `.mov`, or `.webm` file. The upload is **SHA-256 hashed
-  while it streams to disk**. The hash is stored as the Reel's `external_id`, so the same content
-  cannot be ingested twice into one collection, even under a different filename.
-- `POST /api/reels` records an Instagram Reel URL (validated to `instagram.com/.../reel/...`).
-  Duplicate URLs are blocked by a `(collection_id, instagram_url)` unique constraint. The system
-  does **not** scrape Instagram: a URL-only Reel stays a reference until media is supplied.
-- `POST /api/jobs/{job_id}/dispatch` hands a job to the configured task runner.
-
-### Stage 1: media preparation (`app/workers/pipeline.py::prepare_reel_media`)
-
-`FFmpegVideoProcessor` (`app/services/video.py`):
-
-1. `ffprobe` reads duration, dimensions, and whether an audio stream exists.
-2. If there is audio, FFmpeg extracts **mono 16 kHz WAV**, the input format speech models expect.
-3. Frames are sampled at `FRAME_SAMPLE_FPS` (default 1 fps), capped at `MAX_SAMPLED_FRAMES`
-   (default 120).
-4. Audio and frames are saved as `MediaAsset` rows with sequence numbers and timestamps, replacing
-   any earlier output so the stage is retry-safe.
-5. The source video, audio, and frames are published to the object store (see [Storage](#storage)).
-
-FFmpeg binaries are resolved to absolute paths up front (`resolve_binary`). A missing binary then
-shows up in `/api/capabilities` before anyone uploads, instead of failing deep in a worker.
-
-### Stage 2: multimodal analysis (`app/services/analysis.py::run_analysis`)
-
-There are four perception stages. **Each one fails independently** and records a `StageMetric`
-with its status, duration, model, and item count:
-
-| Stage | Contract | Output table |
+| Add | Endpoint | Notes |
 |---|---|---|
-| `transcription` | `SpeechProvider.transcribe(audio)` | `transcripts` (text, language, timed segments) |
-| `ocr` | `OCRProvider.extract(frames)` | `ocr_results` (per-frame text, boxes, confidence, timestamp) |
-| `vision` | `VisionProvider.analyze_video(frames, transcript, ocr_text)` | `visual_analyses` |
-| `extraction` | `ExtractionProvider.extract(vision, transcript, ocr_text)` | `extracted_content` (typed JSON records) |
+| A file | `POST /api/sources/upload` | PDF, DOCX, TXT, Markdown, PNG, JPEG, WebP, MP3, WAV, M4A, Ogg, FLAC, MP4, MOV, WebM. |
+| A link | `POST /api/sources/url` | Web pages (HTML, PDF, text) and single YouTube videos. |
+| Pasted text | `POST /api/sources/text` | Stored as a text source; `MAX_TEXT_CHARACTERS` bounds it. |
 
-Perception and normalisation are deliberately separate. The vision model reports what it sees
-across **evenly spaced frames from the whole clip**, because a movement cannot be identified from a
-single image. The extraction stage then turns that perception, plus OCR and transcript text, into
-typed records such as workout exercises or AI concepts. Both are told to return `null` rather than
-invent a value.
+Each accepts an optional `collection_id` to add the new source straight into a collection.
 
-Every extracted field carries an evidence tag in `data.evidence`: `visual`, `ocr`, `transcript`,
-`metadata`, or `inferred`. Silent Reels still work: OCR supplies sets and reps from on-screen text,
-and the vision model identifies the movement.
+- **Uploads are verified by content.** The extension decides the kind and the file's first bytes
+  must match it, so a renamed file is refused with `415` before the rest is written. Text must be
+  UTF-8; a DOCX must contain a document body. The stored MIME type is the verified one.
+- **Duplicates are detected across your library**, by content hash for files and by normalised
+  link for URLs. Every YouTube form (`youtu.be/…`, `/shorts/…`, `watch?v=…&t=…`) is one video.
+  A `409` names the existing source, so a client can add it to another collection instead.
+- **Collections are selections.** `POST /api/collections/{id}/sources` adds library sources,
+  `DELETE /api/collections/{id}/sources/{source_id}` removes one. Deleting a collection keeps its
+  sources; deleting a source removes it from every collection; cloning a collection shares them.
 
-How failures degrade:
-
-- An OCR failure does not throw away a good transcript, and a transcription failure does not throw
-  away on-screen text.
-- A vision failure falls back to `EvidenceVisionProvider` before giving up.
-- An extraction failure leaves the previous run's knowledge in place instead of erasing it.
-- If any stage failed outright, the run is marked `degraded` and goes to human review, however
-  confident the surviving extraction is.
-
-### Stage 3: indexing, provenance, routing (`analyze_reel`)
-
-After analysis the worker:
-
-1. **Indexes** the Reel. Each modality becomes its own embedded chunk (see
-   [Indexing](#indexing-and-retrieval)).
-2. **Records provenance** in `ProcessingProvenance`: the transcription, vision, embedding, OCR, and
-   extraction models plus `EXTRACTION_PROMPT_VERSION`. These are read from what the run actually
-   persisted, not from configuration as it stands later.
-3. **Verifies confidence** and sets the Reel and job to `completed` or `needs_review`. The decision
-   and its reason are written to the `JobEvent` history.
-
-Job states: `queued → running → completed | needs_review | failed`. The `current_stage` field moves
-`ingestion → media_preparation → ocr_and_transcription → multimodal_analysis → completed/needs_review`.
-
-`POST /api/reels/{id}/reprocess` clears generated artifacts and knowledge, keeps the source media,
-and requeues the Reel.
+Links are fetched by the worker, never in the request. Every redirect hop is checked again, every
+address a host resolves to must be public (unless `FETCH_ALLOW_PRIVATE_HOSTS` is on), and responses
+are size-capped and limited to types a processor can read. YouTube sources fetch the caption track
+through the optional `youtube-transcript-api` (written captions in a preferred language first).
 
 ---
 
-## Provider abstraction
+## Processing
 
-`app/providers/base.py` defines abstract contracts (`SpeechProvider`, `OCRProvider`,
-`VisionProvider`, `ExtractionProvider`, `AnswerProvider`), with embedding and reranking contracts
-alongside. `app/providers/factory.py` is **the only place where configuration picks a concrete
-class**. Heavy implementations are imported lazily inside the factory, so an install without the
-optional ML packages still runs the whole pipeline on local defaults.
+A source's first worker stage routes it by kind: links are fetched, video goes through FFmpeg
+preparation and multimodal analysis, and everything else goes to the processor for its kind.
 
-| Concern | Default (no weights, no API key) | Local models | Hosted |
-|---|---|---|---|
-| Speech | `none` | `faster_whisper` (`WHISPER_MODEL`, e.g. `distil-large-v3`) | — |
-| OCR | `tesseract` | `paddleocr` (PP-OCR via RapidOCR / ONNX Runtime) | — |
-| Vision | `evidence` (records what evidence exists; describes no visuals) | `qwen` (Qwen2.5-VL, 4-bit, constrained JSON) | `claude` |
-| Extraction | `rule_based` (regex set/rep and AI-term patterns) | `vision_fields` (reads the VLM's structured fields, regex fallback) | `claude` |
-| Embeddings | `hashing` (hashed bag-of-features, lexical only) | `sentence_transformer` (`BAAI/bge-m3`) | — |
-| Reranking | `none` | `cross_encoder` (`bge-reranker-*`) | — |
-| Answering | `extractive` (quotes evidence) | — | `claude` |
+| Kind | Processor | Cited as |
+|---|---|---|
+| PDF | Text per page with PDFium; a page with no text layer is rendered and sent to OCR | page |
+| Word | Body in document order, headings kept, tables as rows | section, paragraph |
+| Text, Markdown, pasted text | Heading-aware splitter | section, paragraph |
+| Web page | Main content (`trafilatura` if installed, else a built-in extractor) as Markdown | section, paragraph |
+| YouTube | Captions grouped into windows of about a minute | time range |
+| Audio | FFmpeg to 16 kHz mono, then the speech provider, windowed the same way | time range |
+| Image | OCR text, plus a description from Claude when `VISION_PROVIDER=claude` | image |
+| Video | Transcript, on-screen text, and a visual description, plus a key-points record | time range |
 
-Notes on the less obvious ones:
+Processors return **segments**: a passage, its modality (`text`, `transcript`, `ocr`, `visual`), and
+a locator. A problem that does not stop processing (one unreadable page) becomes a warning and
+the stage is marked `degraded`; a source with nothing extractable fails with the reason.
 
-- **Vision routing** (`VISION_ROUTING=true`, Claude only): `RoutingVisionProvider` sends simple clips
-  (at most `ROUTING_SIMPLE_MAX_FRAMES`) to `ANTHROPIC_SMALL_MODEL`. It escalates to the strong model
-  only when the small one is uncertain.
-- **Qwen constrained decoding**: with `QWEN_CONSTRAINED_JSON=true`, `lm-format-enforcer` lets the
-  model emit only tokens that keep the output a valid instance of the vision JSON schema, so
-  malformed JSON cannot be produced at all. Free-text fields have `maxLength` bounds so the model
-  cannot run out of tokens mid-string.
-- **Prompt budgeting**: `VLM_MAX_OCR_CHARS` and `VLM_MAX_TRANSCRIPT_CHARS` limit how much text goes
-  into the vision prompt. Attention cost grows quadratically with prompt length; one 84-second
-  screen recording produced ~10.5k tokens of OCR and requested a 10 GiB attention tensor.
-- **GPU co-existence** (`app/core/gpu.py`): on Windows, onnxruntime (RapidOCR) and CTranslate2
-  (faster-whisper) ship their own CUDA libraries. If either loads before PyTorch, a later cuDNN call
-  causes a *native* abort that Python cannot catch. `prefer_torch_cudnn()` warms PyTorch's cuDNN
-  first. `RETRIEVAL_FP16` loads BGE-M3 and the reranker in fp16, which halves their VRAM.
+### Video analysis
 
----
+Video keeps the multi-stage pipeline the project started with. FFmpeg extracts audio and samples
+frames; then four stages run and **fail independently**: transcription, OCR, vision, and
+extraction. A failure in one keeps the others' results, and the run is marked degraded.
 
-## Confidence routing and verification
+Extraction produces one domain-neutral **key-points record** per video (`topic`, `key_points`,
+`entities`), and every field is tagged with the evidence it came from (`visual`, `ocr`,
+`transcript`, `metadata`, `inferred`). Tags are re-derived by matching values against the stored
+OCR and transcript text rather than trusted from the model. The record's confidence then decides
+whether a person needs to look:
 
-`app/services/verification.py` routes on the **lowest** extraction confidence in a run, using
-three tiers:
-
-| Lowest confidence | Decision |
+| Confidence | Outcome |
 |---|---|
-| ≥ `AUTO_ACCEPT_CONFIDENCE` (0.85) | `accepted` |
-| between the two thresholds | secondary verification → `verified` or `needs_review` |
-| < `AUTO_REVIEW_CONFIDENCE` (0.60) | `needs_review` |
+| Above `AUTO_ACCEPT_CONFIDENCE` (0.85) | Accepted |
+| Between the thresholds | Checked against the stored text: corroborated values are accepted, others go to review |
+| Below `AUTO_REVIEW_CONFIDENCE` (0.60), or any stage failed | Review queue (`GET /api/sources/review/queue`) |
 
-Secondary verification checks each mid-confidence scalar field against the stored OCR and
-transcript text. A field passes if its evidence tag is `ocr` or `transcript`, or if its value
-appears literally in that text. Any field that rests only on inference sends the Reel to a human.
-A run with no extractions, or with no confidence values, also goes to review.
-
-People resolve reviews with `POST /api/reels/{id}/review` and record field-level fixes with
-`POST /api/reels/{id}/corrections`. A correction is stored next to the original model output and
-never overwrites it.
+Corrections (`POST /api/sources/{id}/corrections`) are stored separately from model output, so the
+original extraction stays auditable.
 
 ---
 
-## Indexing and retrieval
+## Chunking and retrieval
 
-### Chunking (`app/services/embeddings.py`)
+Segments are packed into chunks of at most `CHUNK_MAX_CHARACTERS`, each starting with the end of
+the previous one (`CHUNK_OVERLAP_CHARACTERS`), so a passage cut at a boundary is still found whole.
+Packing never mixes evidence streams or crosses a heading, but does span pages and time windows;
+the chunk's locator records the span ("pp. 3–4"). Each chunk is embedded and stored with its
+locator.
 
-`build_reel_chunks` embeds each modality as its own chunk so every match can be traced to its
-source: `transcript`, `ocr`, `visual`, one `extracted:<content_type>` per record, and a
-whole-Reel `summary` (creator + caption + all of the above). Chunks are capped at 4,000 characters.
-
-### Vector stores (`app/services/vector_store.py`)
-
-- `database` (default): vectors are stored as JSON in `content_embeddings` and searched with an
-  exact brute-force cosine scan. Recall is perfect and there is no second system to keep in sync.
-- `qdrant`: uses `QDRANT_URL`, with payload filters scoped to the collection, for collections too
-  large to scan.
-
-Changing the embedding model changes the vector width (for example 256 → 1024). Old rows are then
-skipped and logged. Rebuild them with `POST /api/collections/{id}/index`.
-
-### Search modes (`app/services/retrieval.py`, `POST /api/search`)
-
-| Mode | Mechanism |
+| `POST /api/search` mode | How it ranks |
 |---|---|
-| `lexical` (default) | Counts exact term occurrences across transcript, OCR, visual description, and extraction text. Handles technical strings like `QLoRA` or `BM25` that embeddings blur. |
-| `semantic` | Embeds the query, searches the vector store, and keeps the best chunk per Reel (up to 3 snippets). |
-| `hybrid` | **Reciprocal rank fusion** (`k = 60`) of the lexical and dense rankings, then optional reranking. |
+| `lexical` | BM25 over the chunks of the sources in scope; good for exact terms and names |
+| `semantic` | Vector similarity over the same chunks |
+| `hybrid` | Reciprocal rank fusion of both rankings per chunk, then the reranker |
 
-RRF combines rankings rather than scores because occurrence counts and cosine similarities are on
-different scales; only their orderings can be combined meaningfully. The reranker scores a wider
-window (`RERANK_CANDIDATES`, default 30) than the page asked for, since its value is promoting
-results that ranked just below the cut.
-
-Results can be filtered by `content_type`, `creator`, and `topic`. Topics come from extracted
-knowledge, not free-text tags. When filters are active, semantic search fetches 5× more candidates
-so filtering cannot empty the page.
-
-`GET /api/collections/{id}/duplicates` flags near-duplicate Reels when whole-content similarity is
-at least `DUPLICATE_SIMILARITY_THRESHOLD` (0.92). This catches re-encodes and reposts that hash
-checks miss.
+Results group chunks by source and carry up to three passages, each with its locator and label.
+Filters: `content_type`, `author`, `topic`, `minimum_score`, and `source_ids` to search part of a
+collection. `POST /api/collections/{id}/ask` answers one question from hybrid, reranked,
+chunk-level evidence; `GET /api/collections/{id}/duplicates` finds near-identical sources.
 
 ---
 
-## Grounded answering and reports
+## The chatbot
 
-`POST /api/collections/{id}/ask` (`app/services/rag.py`):
-
-1. Retrieves up to `RAG_EVIDENCE_LIMIT` chunks by dense similarity. If nothing is indexed yet, it
-   falls back to lexical search so it can still cite real sources.
-2. Passes the question and **only that evidence** to the `AnswerProvider`.
-3. Grounding is enforced in code as well as in the prompt. The prompt forbids outside knowledge,
-   and any cited Reel id the model returns that was not in the supplied evidence is **dropped**.
-   With no relevant evidence, both providers say so instead of guessing.
-
-Reports (`app/services/reporting.py`):
-
-- `GET /api/reports/collections/{id}` returns deterministic aggregates: topic, technology, creator,
-  and content-type counts, plus average extraction confidence.
-- `GET /api/reports/collections/{id}/narrative` adds prose. The narrating model sees **only the
-  precomputed counts, never the Reels**, so cost stays flat as a collection grows. Without a
-  narration provider the endpoint returns `narrated: false` rather than invented prose.
-
-`POST /api/workouts/generate` (`app/services/workout.py`) builds a source-cited plan from extracted
-workout exercises and can filter by available equipment.
-
----
-
-## Data model
-
-The schema is managed by Alembic migrations in `app/db/migrations/versions`. The API applies any
-pending migration when it starts (`AUTO_MIGRATE=true`, the default). With several API processes on
-one database, turn that off and run `alembic upgrade head` once per release instead.
-
-To change the schema, edit the models, then draft and review a migration:
-
-```bash
-.venv/Scripts/python -m alembic revision --autogenerate -m "describe the change"
-```
-
-`tests/test_migrations.py` fails whenever the models and the migrations disagree, so a model change
-cannot land without its migration. A database created by `create_all` before migrations existed is
-adopted automatically: the known gaps are filled and it is stamped at the baseline revision. A
-database from the Instagram Reels era is refused with instructions instead.
+Conversations belong to a collection and, optionally, to a subset of its sources.
 
 ```text
-users
-collections ─┬─< reels ─┬── processing_jobs ──< job_events
-  (user_id)  │          │                    └─< task_dispatches
-             │          ├─< media_assets        (audio | frame, sequence, timestamp)
-             │          ├── transcripts         (text, language, segments, model)
-             │          ├─< ocr_results         (frame, timestamp, text, boxes, confidence)
-             │          ├── visual_analyses     (description, analysis_json, model, confidence)
-             │          ├─< extracted_content   (content_type, data JSON + evidence map, confidence)
-             │          ├─< content_embeddings  (chunk_key, content_type, vector, model, dims)
-             │          ├── processing_provenance (processing_version, models JSON)
-             │          ├─< stored_objects      (object-store keys)
-             │          ├─< stage_metrics       (stage, status, duration_ms, model, items)
-             │          └─< extraction_corrections
-             └─< saved_searches
-evaluation_cases ──< benchmark_predictions >── benchmark_runs
+POST   /api/collections/{id}/conversations          start one (title, source_ids optional)
+GET    /api/collections/{id}/conversations          list them
+GET    /api/conversations/{id}                      read it, with every message
+PATCH  /api/conversations/{id}                      rename, or change its sources (null = all)
+POST   /api/conversations/{id}/messages             ask, and wait for the answer (JSON)
+POST   /api/conversations/{id}/messages/stream      ask, and receive the answer as it is written
 ```
 
-Every resource is scoped to `user_id` through its collection. Ownership checks live in
-`app/services/authorization.py` and are applied in every router.
+A turn stores the question, rewrites a follow-up into a standalone query using the conversation,
+retrieves passages, and streams the answer. The model cites passages as `[1]`, `[2]`; those markers
+are resolved to the passages they name (source, chunk, locator, label, snippet), and markers that
+point at nothing are removed from the text. The streaming endpoint sends Server-Sent Events:
 
----
-
-## Storage
-
-Working files and durable storage are kept separate on purpose:
-
-- **`MEDIA_ROOT`** holds the local working copies that FFmpeg, OCR, and the VLM read
-  (`prepared/<reel_id>/audio.wav`, `prepared/<reel_id>/frames/frame_NNNNN.jpg`).
-- **The object store** holds what is kept, under keys that are the same on every backend:
-
-```text
-users/{user_id}/reels/{reel_id}/video.mp4
-users/{user_id}/reels/{reel_id}/audio.wav
-users/{user_id}/reels/{reel_id}/frames/frame_00001.jpg
-```
-
-| `OBJECT_STORE` | Access |
+| Event | Data |
 |---|---|
-| `local` (default) | Files under `OBJECT_STORE_ROOT`, streamed through `GET /api/reels/{id}/media/{object_id}` with the same ownership check as every other endpoint. |
-| `s3` | S3 or MinIO (`S3_BUCKET`, `S3_ENDPOINT_URL`). `GET /api/reels/{id}/media` returns presigned URLs valid for `SIGNED_URL_TTL_SECONDS`. |
+| `user_message` | The stored question |
+| `retrieval` | The query actually searched and how many passages were found |
+| `delta` | The next fragment of the answer |
+| `done` | The stored answer with its citations |
+| `error` | `failed` or `refused`, with a message; the stream then ends |
 
-Publishing is idempotent: republishing replaces a Reel's previous object records. Deleting a Reel
-or collection removes its key prefix.
+Failures, refusals, and a client that disconnects mid-answer are all stored as such. A conversation
+answers one question at a time (`409` while it is busy).
 
 ---
 
-## Task execution
+## Providers
 
-| `TASK_RUNNER` | Mechanism | Trade-off |
+Every model sits behind a contract in `app/providers/base.py`, chosen by configuration in
+`app/providers/factory.py`. The defaults need no model, network, or API key.
+
+| Setting | Default | Alternatives |
 |---|---|---|
-| `celery` (default) | `reels.prepare_media` → `reels.analyze_media` Celery tasks on Redis, auto-retry with backoff (max 2). | Durable, horizontally scalable; needs Redis and a worker process. |
-| `local` | One daemon thread with an in-memory queue (`app/services/local_runner.py`). | No infrastructure. Processes **one job at a time** so the VLM, Whisper, and embedder never compete for one 8 GB GPU. In-flight work is lost on restart. |
+| `CHAT_PROVIDER` | `extractive` (quotes the best sentence of each passage) | `claude`, `ollama` |
+| `ANSWER_PROVIDER` (`/ask`) | `extractive` | `claude`, `ollama` |
+| `EMBEDDING_PROVIDER` | `hashing` (lexical, 256-d) | `sentence_transformer` (BGE-M3) |
+| `RERANKER` | `none` | `cross_encoder` (BGE reranker) |
+| `OCR_PROVIDER` | `tesseract` | `paddleocr` (RapidOCR / PP-OCR) |
+| `SPEECH_PROVIDER` | `none` | `faster_whisper` |
+| `VISION_PROVIDER` | `evidence` (records which evidence exists) | `qwen` (local Qwen2.5-VL), `claude` |
+| `EXTRACTION_PROVIDER` | `rule_based` (key points in the evidence's own words) | `vision_fields`, `claude` |
+| `VECTOR_STORE` | `database` (exact scan) | `qdrant` |
 
-Two behaviours that came from real failures:
-
-- **Broker probe.** Before `apply_async`, `app/services/dispatch.py` opens a plain socket to the
-  broker with a 1-second timeout. Celery's own retry settings could not reliably stop a request
-  from hanging for over a minute when Redis was down.
-- **Resume on startup.** With the local runner, the FastAPI lifespan hook requeues jobs left
-  `queued` or `running` at `ingestion`, `ocr_and_transcription`, or `multimodal_analysis`. Re-running
-  a stage is safe because each stage replaces its own earlier output.
-
----
-
-## Security
-
-- **Two auth modes**, set by `AUTH_REQUIRED`:
-  - Off (default): a bearer token is used when present; otherwise the `X-User-Id` header acts as a
-    development identity.
-  - On: only a valid bearer token counts, and `X-User-Id` is ignored completely.
-
-  The authorization logic is the same in both modes; only how the caller is identified changes.
-- **Passwords**: PBKDF2-HMAC-SHA256 with a per-user salt. The iteration count is stored inside the
-  hash so it can be raised later without invalidating existing passwords (`app/core/passwords.py`).
-- **Tokens**: HMAC-signed payloads with an explicit expiry, not JWTs. That avoids a dependency and
-  JWT's algorithm-confusion pitfalls (`app/core/security.py`). `SECRET_KEY` is mandatory when auth
-  is on. Without auth, an ephemeral per-process key is generated.
-- **No account enumeration**: login gives the same response for a wrong password and an unknown
-  account.
-- **Rate limiting**: `RATE_LIMIT_PER_MINUTE` turns on a fixed-window limiter keyed by bearer token
-  or client IP, returning `429` with `Retry-After`. It is **per process**: with N workers the
-  effective limit is N times the setting.
-- Uploads are capped at `MAX_UPLOAD_BYTES` (100 MB). The Docker image runs as a non-root user.
+- **Claude chat** uses `claude-opus-5-5` (`CHAT_MODEL`), streams, sets effort explicitly
+  (`CHAT_EFFORT`), and enables the server-side refusal fallback (`fallbacks: "default"`), so a
+  question a safety classifier declines is retried on Anthropic's recommended model in the same
+  stream. A refusal that survives it is discarded rather than kept as an answer.
+- **Ollama** runs locally (`OLLAMA_MODEL`, default `qwen2.5:7b`) with the context window set
+  explicitly (`OLLAMA_NUM_CTX`), since Ollama's 2048-token default would cut off the passages.
+- Every provider gets the same prompts: answer only from the passages, cite each claim, and say so
+  when the collection does not cover the question.
 
 ---
 
-## Observability and resilience
+## Storage, tasks, and migrations
 
-- **Structured logs**: one JSON object per line (`app/core/logging.py`). The request id is carried
-  in a `contextvars` variable, so a log line written deep inside a service still names the request
-  that caused it. Responses echo `X-Request-Id`.
-- **Health**: `GET /health` checks liveness; `GET /ready` runs `SELECT 1` and returns `503` if the
-  database is unreachable.
-- **Metrics**: `GET /api/system/metrics` returns counts and status breakdowns.
-  `GET /api/system/metrics/pipeline` returns per-stage run counts, failure rate, average and p95
-  latency, items processed, and models used. Skipped stages are left out of the failure rate.
-- **Capabilities**: `GET /api/capabilities` reports the active providers, retrieval modes,
-  thresholds, storage backend, auth mode, resolved FFmpeg paths, and a list of limitations derived
-  from the actual configuration.
-- **Job audit trail**: `GET /api/jobs/{id}/events` lists every stage transition, degradation, and
-  routing decision with its reason.
+- **Working files** live under `MEDIA_ROOT` (uploads, fetched pages, extracted audio and frames).
+  **Durable copies** go to the object store under `users/{user_id}/sources/{source_id}/…`: the
+  original file for every kind, plus audio and frames for video. `OBJECT_STORE=local` serves them
+  through `GET /api/sources/{id}/media/{object_id}`; `s3` (S3 or MinIO) returns presigned URLs.
+  A fetched HTML page is only ever served as a sandboxed download.
+- **Task runner.** `TASK_RUNNER=celery` uses Redis-backed Celery tasks (`sources.start`,
+  `sources.analyze_media`, `sources.extract_content`) with retries. `TASK_RUNNER=local` runs one
+  job at a time on a background thread, so local models never compete for one GPU, and resumes
+  unfinished jobs at startup. Jobs are dispatched with `POST /api/jobs/{id}/dispatch`.
+- **Migrations.** The schema is managed by Alembic (`app/db/migrations`). The API applies pending
+  migrations at startup (`AUTO_MIGRATE=true`); with several API processes, turn that off and run
+  `alembic upgrade head` once per release. To change the schema, edit the models and draft a
+  migration:
 
----
+  ```bash
+  .venv/Scripts/python -m alembic revision --autogenerate -m "describe the change"
+  ```
 
-## Evaluation and benchmarking
-
-- **Cases**: `POST /api/evaluations/cases` stores manual ground truth.
-  `POST /api/evaluations/cases/{id}/score` scores one prediction by exact field match.
-  `GET /api/evaluations/summary` gives accuracy by category.
-- **Benchmark runs**: `POST /api/evaluations/runs` registers a configuration as a free-form object,
-  for example `{"vision_model": "qwen2.5-vl-3b", "uses_ocr": false}`. Predictions are submitted with
-  optional latency and cost.
-- **Comparison**: `GET /api/evaluations/runs/compare?run_ids=1,2` ranks runs by accuracy, with
-  latency and cost alongside. It compares **only the cases every run scored**, so a difference in
-  coverage is not reported as a difference in quality. With two runs it also returns a delta: the
-  accuracy change, cases improved or regressed, and the settings that differed. This is how ablations
-  such as OCR on vs. off are measured instead of assumed.
+  `tests/test_migrations.py` fails whenever the models and migrations disagree. A database created
+  before migrations existed is adopted automatically.
 
 ---
 
-## API surface
+## Security and operations
 
-Interactive OpenAPI docs are at `/docs`. All routes are under `/api`:
+- **Auth.** With `AUTH_REQUIRED=false` (default) a bearer token is used when present, otherwise the
+  `X-User-Id` header is a development identity. With it on, only a valid bearer token counts.
+  Passwords are PBKDF2-HMAC-SHA256 with a per-user salt; tokens are HMAC-signed with an expiry, and
+  `SECRET_KEY` is required when auth is on. Every resource is scoped to its owner.
+- **Untrusted input.** Uploads are type-checked by content and size-capped (`MAX_UPLOAD_BYTES`);
+  links are refused for private addresses and re-checked on every redirect; fetched HTML is never
+  rendered on the API's origin.
+- **Rate limiting.** `RATE_LIMIT_PER_MINUTE` enables a per-process fixed-window limiter.
+- **Observability.** One JSON log line per event with a request id; `GET /health` and `GET /ready`;
+  per-stage latency and failure rates at `GET /api/system/metrics/pipeline`; every job's history at
+  `GET /api/jobs/{id}/events`; `GET /api/capabilities` reports what is configured and what that
+  configuration cannot do.
+- **Evaluation.** Annotated cases (`/api/evaluations/cases`) and benchmark runs
+  (`/api/evaluations/runs`) compare extraction accuracy across configurations over the cases every
+  run scored, which is how an ablation such as OCR on versus off is measured.
+
+---
+
+## API overview
+
+The full, interactive reference is at `/docs`.
 
 | Area | Endpoints |
 |---|---|
-| Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` |
-| Collections | `POST/GET /collections`, `GET/PATCH/DELETE /collections/{id}`, `GET /{id}/export`, `GET /{id}/export.csv`, `POST /{id}/clone`, `GET /{id}/facets` |
-| Reels | `POST /reels`, `POST /reels/upload`, `GET /reels/{id}`, `PATCH/DELETE /reels/{id}`, `GET /reels/collection/{collection_id}`, `POST /reels/{id}/reprocess`, `GET /reels/review/queue`, `POST /reels/{id}/review` |
-| Analysis & quality | `GET /reels/{id}/analysis`, `POST/GET /reels/{id}/corrections` |
-| Media | `GET /reels/{id}/media`, `GET /reels/{id}/media/{object_id}`, `POST /reels/{id}/publish` |
-| Jobs | `GET /jobs`, `GET /jobs/{id}`, `GET /jobs/reel/{reel_id}`, `GET /jobs/{id}/events`, `POST /jobs/{id}/dispatch`, `GET /jobs/{id}/dispatches`, `POST /jobs/{id}/cancel`, `POST /jobs/{id}/retry` |
-| Knowledge | `POST /search`, `POST /collections/{id}/index`, `POST /reels/{id}/index`, `POST /collections/{id}/ask`, `GET /collections/{id}/duplicates` |
-| Saved searches | `POST/GET /saved-searches`, `POST /saved-searches/{id}/run`, `DELETE /saved-searches/{id}` |
-| Reports | `GET /reports/collections/{id}`, `GET /reports/collections/{id}/narrative`, `POST /workouts/generate` |
-| Evaluation | `/evaluations/cases`, `/evaluations/summary`, `/evaluations/runs`, `/evaluations/runs/{id}/predictions`, `/evaluations/runs/compare` |
-| System | `GET /capabilities`, `GET /system/metrics`, `GET /system/metrics/pipeline`, `GET /system/export` |
-
-Example:
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/search -H "Content-Type: application/json" -H "X-User-Id: demo" -d "{\"collection_id\": 1, \"query\": \"romanian deadlift tempo\", \"mode\": \"hybrid\", \"limit\": 10}"
-```
-
----
-
-## Web interface
-
-`GET /app` serves a single-page client from `app/web/static`: plain HTML, CSS, and JavaScript with
-no framework and no build step. It calls the same public API as any other client. Its eight views
-are Dashboard, Collections, Search, Ask, Workout, Review Queue, Pipeline, and Account.
-
-The main interaction is the **Reel audit drawer**, which opens wherever a Reel appears. It shows
-the extracted fields with their evidence tags, the confidence and the routing tier that was applied,
-a timestamped OCR and transcript timeline, and the model provenance. `inferred` values are styled
-deliberately weaker. Amber means "a human should look"; red means hard failure. Static asset URLs
-carry a version query string, so bump it when editing `app.js` or `style.css`.
+| Library | `POST /api/sources/upload`, `/url`, `/text`; `GET /api/sources`; `GET/PATCH/DELETE /api/sources/{id}`; `POST /api/sources/{id}/reprocess` |
+| Collections | `POST/GET /api/collections`; `GET/PATCH/DELETE /api/collections/{id}`; `POST/DELETE /api/collections/{id}/sources`; `/clone`; `/export`, `/export.csv` |
+| Processing | `POST /api/jobs/{id}/dispatch`, `/retry`, `/cancel`; `GET /api/jobs`, `/api/jobs/{id}`, `/events`; `GET /api/sources/{id}/analysis` |
+| Search and answers | `POST /api/search`; `POST /api/collections/{id}/ask`, `/index`; `GET /api/collections/{id}/duplicates`, `/facets`; saved searches at `/api/saved-searches` |
+| Chat | `/api/collections/{id}/conversations`; `/api/conversations/{id}`; `/api/conversations/{id}/messages`, `/messages/stream` |
+| Review | `GET /api/sources/review/queue`; `POST /api/sources/{id}/review`; `/api/sources/{id}/corrections` |
+| Media | `GET /api/sources/{id}/media`, `/media/{object_id}`; `POST /api/sources/{id}/publish` |
+| Accounts and system | `/api/auth/register`, `/login`, `/me`; `/api/system/metrics`, `/metrics/pipeline`, `/export`; `/api/capabilities`; `/health`, `/ready` |
+| Evaluation | `/api/evaluations/cases`, `/summary`, `/runs`, `/runs/compare` |
 
 ---
 
 ## Configuration
 
-All settings come from environment variables or `.env`, through `pydantic-settings`
-(`app/core/config.py`). [.env.example](.env.example) documents every option. The most important
-ones:
+Settings come from environment variables or `.env`; [.env.example](.env.example) lists every one
+with its default. The ones you are most likely to change:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `sqlite:///./data/multimodal_knowledge.db` | Use `postgresql+psycopg://…` in deployment. |
-| `TASK_RUNNER` | `celery` | `local` for a single-user install without Redis. |
-| `SPEECH_PROVIDER` / `OCR_PROVIDER` | `none` / `tesseract` | See [Provider abstraction](#provider-abstraction). |
-| `VISION_PROVIDER` / `EXTRACTION_PROVIDER` | `evidence` / `rule_based` | `qwen`, `claude`, `vision_fields`. |
-| `EMBEDDING_PROVIDER` / `VECTOR_STORE` | `hashing` / `database` | `sentence_transformer`, `qdrant`. |
-| `RERANKER` / `ANSWER_PROVIDER` | `none` / `extractive` | `cross_encoder`, `claude`. |
-| `AUTO_ACCEPT_CONFIDENCE` / `AUTO_REVIEW_CONFIDENCE` | `0.85` / `0.60` | Routing thresholds. |
-| `FRAME_SAMPLE_FPS` / `MAX_SAMPLED_FRAMES` / `VLM_MAX_FRAMES` | `1` / `120` / `8` | Frame sampling and how many frames the VLM sees. |
-| `OBJECT_STORE` | `local` | `s3` for S3/MinIO. |
-| `AUTH_REQUIRED` / `SECRET_KEY` | `false` / empty | A key is required when auth is on. |
-| `ANTHROPIC_API_KEY` | — | Read directly by the SDK; needed only for `claude` providers. |
+| `DATABASE_URL` | `sqlite:///./data/multimodal_knowledge.db` | Use `postgresql+psycopg://…` in deployment |
+| `TASK_RUNNER` | `celery` | `local` runs jobs on a thread, no Redis needed |
+| `CHAT_PROVIDER`, `ANSWER_PROVIDER` | `extractive` | `claude` or `ollama` for model-written answers |
+| `CHAT_MODEL`, `CHAT_EFFORT` | `claude-opus-5-5`, `medium` | Claude chat model and effort |
+| `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX` | `http://localhost:11434`, `qwen2.5:7b`, `8192` | Local chat model |
+| `EMBEDDING_PROVIDER`, `RERANKER` | `hashing`, `none` | Dense embeddings and reranking |
+| `SPEECH_PROVIDER`, `OCR_PROVIDER`, `VISION_PROVIDER` | `none`, `tesseract`, `evidence` | Perception for audio, images, video |
+| `CHUNK_MAX_CHARACTERS`, `CHUNK_OVERLAP_CHARACTERS` | `1500`, `200` | Chunk size; reindex after changing |
+| `FETCH_ALLOW_PRIVATE_HOSTS` | `false` | Allow links to local network addresses |
+| `AUTH_REQUIRED`, `SECRET_KEY` | `false`, empty | Real authentication |
+| `AUTO_MIGRATE` | `true` | Apply migrations at API startup |
 
-`ENV_FILE` redirects which env file is loaded. The test suite uses it so a developer's own `.env`
-(with real models configured) cannot change what the tests assert.
+`ANTHROPIC_API_KEY` is read by the Anthropic SDK for any Claude provider.
 
 ---
 
@@ -519,16 +346,15 @@ ones:
 
 ### Requirements
 
-- Python 3.12 (the Docker image uses `python:3.12-slim`)
-- FFmpeg and ffprobe on `PATH`, or set `FFMPEG_BINARY` / `FFPROBE_BINARY`
+- Python 3.12
+- FFmpeg and ffprobe on `PATH` (or `FFMPEG_BINARY` / `FFPROBE_BINARY`) for audio and video
 - Tesseract for the default OCR provider
-- Optional: Redis (Celery runner), PostgreSQL, Qdrant, MinIO, a CUDA GPU for local models
+- Optional: Redis (Celery), PostgreSQL, Qdrant, MinIO, Ollama, a CUDA GPU for local models
 
 ### Local (Windows)
 
-Double-click `run.bat`, or run `run.bat 8055` to choose a port. It uses `.venv` when present,
-checks dependencies, starts Uvicorn with reload, opens `/app` once `/health` responds, and streams
-one JSON log line per request.
+Double-click `run.bat`, or run `run.bat 8055` for another port. It uses `.venv`, checks
+dependencies, starts Uvicorn with reload, and opens the API reference once `/health` responds.
 
 By hand:
 
@@ -544,12 +370,10 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn app.main:app --reload
 ```
 
-Then open `http://127.0.0.1:8000/app` for the UI or `/docs` for the API. Without Redis, set
-`TASK_RUNNER=local` in `.env`.
+Then open `http://127.0.0.1:8000/docs`. Without Redis, set `TASK_RUNNER=local` in `.env`.
 
-Optional model backends (Whisper, BGE-M3, Qdrant client, Anthropic SDK, boto3, RapidOCR,
-Transformers + bitsandbytes for Qwen) are in `requirements-optional.txt`. For Qwen, install a CUDA
-build of PyTorch first.
+Optional backends (Whisper, BGE-M3, Qdrant, the Anthropic SDK, boto3, RapidOCR, trafilatura,
+youtube-transcript-api, and Transformers for Qwen) are in `requirements-optional.txt`:
 
 ```bash
 .venv/Scripts/pip install -r requirements-optional.txt
@@ -561,9 +385,8 @@ build of PyTorch first.
 docker compose up --build
 ```
 
-This starts the API (`:8000`), a Celery worker, PostgreSQL 16, Redis 7, MinIO (`:9000`, console
-`:9001`), and Qdrant (`:6333`). The image includes FFmpeg and Tesseract. Provider choices pass
-through from your shell environment (`VISION_PROVIDER`, `ANTHROPIC_API_KEY`, …).
+This starts the API (`:8000`), a Celery worker, PostgreSQL 16, Redis 7, MinIO (`:9000`), and Qdrant
+(`:6333`). The image includes FFmpeg and Tesseract; provider settings pass through from your shell.
 
 ---
 
@@ -573,10 +396,10 @@ through from your shell environment (`VISION_PROVIDER`, `ANTHROPIC_API_KEY`, …
 .venv/Scripts/python -m pytest
 ```
 
-There are 157 test functions in 23 modules under `tests/`. They cover the API, auth, pipeline stages, video
-preparation, every provider (model clients replaced by fakes), retrieval and reranking, RAG
-grounding, object storage, degradation and metrics, the local runner, benchmarking, and the web
-client. They run deterministically with no network, no model weights, and no API key.
+The suite runs with no network, no model weights, and no API key: model clients are replaced by
+fakes, HTTP by mock transports, and test PDFs and Word files are generated on the fly. It covers
+ingestion and type checking, link safety, every processor, chunking and located retrieval, the
+chatbot and its providers, video analysis and confidence routing, storage, migrations, and auth.
 
 ---
 
@@ -584,32 +407,38 @@ client. They run deterministically with no network, no model weights, and no API
 
 ```text
 app/
-  main.py            FastAPI app, middleware, router registration, startup resume, /health, /ready
-  api/               HTTP routers, one per resource area
-  core/              config, structured logging, auth tokens, password hashing, rate limiter, GPU init
-  db/                engine and session factory
-  models/            SQLAlchemy ORM models
-  schemas/           Pydantic request/response models
-  providers/         model contracts (base.py), factory, and local / Qwen / Claude / Paddle / Whisper implementations
-  services/          ingestion, analysis, indexing, retrieval, RAG, verification, storage, reporting, evaluation
-  workers/           Celery app, task definitions, pipeline stage functions
-  web/static/        single-page client (index.html, app.js, style.css)
-tests/               pytest suite
-data/                SQLite database, working media, local object store (git-ignored)
-Dockerfile, docker-compose.yml, run.bat, requirements*.txt, .env.example
+  main.py          FastAPI app, middleware, routers, startup migration and job resume, health
+  api/             HTTP routers, one per resource area
+  core/            settings, structured logging, auth tokens, password hashing, rate limiter
+  db/              engine, session factory, Alembic migrations, migration runner
+  models/          SQLAlchemy models
+  schemas/         Pydantic request and response models
+  processors/      one processor per kind of content, producing located segments
+  providers/       model contracts, factory, and the local / Claude / Ollama / Qwen / Whisper /
+                   PaddleOCR implementations
+  services/        ingestion, links and fetching, chunking, retrieval, chat, analysis,
+                   verification, storage, evaluation
+  workers/         Celery app, tasks, pipeline stages
+tests/             pytest suite
+data/              SQLite database, working media, local object store (git-ignored)
+alembic.ini, Dockerfile, docker-compose.yml, run.bat, requirements*.txt, .env.example
 ```
 
 ---
 
 ## Limitations
 
-- **Default providers are baselines, not perception.** With no configuration, vision records only
-  which evidence exists, extraction is regex-based, and the hashing embedder is lexical. Real visual
-  understanding and semantic retrieval need `qwen`/`claude` and `sentence_transformer`.
-- **Claude providers are tested only against fake clients.** The tests fix the request shape and the
-  grounding rules, not prompt quality against live output.
-- **Local VLM confidence is optimistic.** Qwen2.5-VL-3B often reports 0.95–1.0 even on thin
-  evidence, which can leave the review queue empty. Benchmark before trusting it.
-- **No Instagram download.** URL ingestion only records a reference; media has to be uploaded.
+- **No frontend yet.** The API is complete; a client is still to be built.
+- **The defaults are baselines.** Without configuration, answers quote passages instead of
+  composing them, embeddings are lexical, audio cannot be transcribed, and images are searchable
+  by their OCR text only. Configure a chat model, dense embeddings, and perception providers for
+  real use.
+- **Live models are untested here.** Claude and Ollama are exercised through fake clients that fix
+  the request shape and the grounding rules, not the quality of real answers. The same is true of
+  Whisper, PaddleOCR on scanned pages, and Claude image descriptions.
+- **YouTube transcripts use an unofficial library**, which can break when YouTube changes and may be
+  refused from cloud IP ranges.
+- **Link fetching** checks resolved addresses before connecting but does not pin the connection to
+  them, so a rebinding DNS server could still steer a fetch inward.
+- **Migrations are verified on SQLite only**, not yet against PostgreSQL.
 - **Single-process rate limiting**, and no Prometheus or OpenTelemetry export.
-- Pose estimation, which the architecture lists as optional, is not implemented.

@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any
 
 
+# The one structured record a video yields: what it is about, what it says, and who or what it names.
+KEY_POINTS_CONTENT_TYPE = "key_points"
+KEY_POINT_FIELDS = ("topic", "key_points", "entities")
+
+
 @dataclass(frozen=True)
 class TranscriptionResult:
     text: str

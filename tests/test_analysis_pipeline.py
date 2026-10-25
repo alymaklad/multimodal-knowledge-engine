@@ -36,8 +36,8 @@ class FakeExtractionProvider:
     def extract(self, _vision: VisionResult, _transcript: str, _ocr: str) -> list[ExtractionResult]:
         return [
             ExtractionResult(
-                content_type="ai_knowledge",
-                data={"topic": "hybrid search", "technologies": ["BM25", "embeddings"]},
+                content_type="key_points",
+                data={"topic": "hybrid search", "entities": ["BM25", "embeddings"]},
                 text_representation="Hybrid search combines BM25 and dense embeddings for RAG.",
                 confidence=0.95,
             )
@@ -100,21 +100,21 @@ def test_analysis_worker_persists_multimodal_knowledge_and_searches_it() -> None
         payload = response.json()
         assert payload["transcript"]["text"] == "This source explains hybrid retrieval."
         assert payload["ocr_results"][0]["timestamp_seconds"] == 0
-        assert payload["extracted_content"][0]["content_type"] == "ai_knowledge"
+        assert payload["extracted_content"][0]["content_type"] == "key_points"
 
 
 class MidConfidenceExtractionProvider:
     """Confidence between the review and auto-accept thresholds, so verification decides."""
 
-    def __init__(self, exercise: str) -> None:
-        self._exercise = exercise
+    def __init__(self, topic: str) -> None:
+        self._topic = topic
 
     def extract(self, _vision: VisionResult, _transcript: str, _ocr: str) -> list[ExtractionResult]:
         return [
             ExtractionResult(
-                content_type="workout_exercise",
-                data={"exercise": self._exercise, "sets": 3},
-                text_representation=f"{self._exercise}. 3 sets.",
+                content_type="key_points",
+                data={"topic": self._topic, "parameter": "k = 60"},
+                text_representation=f"Topic: {self._topic}. k = 60.",
                 confidence=0.7,
             )
         ]
@@ -122,7 +122,7 @@ class MidConfidenceExtractionProvider:
 
 class SilentOCRProvider:
     def extract(self, frame_paths: list[Path]) -> list[OCRObservation]:
-        return [OCRObservation(frame_path=str(frame_paths[0]), text="Bulgarian Split Squat 3 sets", confidence=0.95)]
+        return [OCRObservation(frame_path=str(frame_paths[0]), text="Reciprocal Rank Fusion k = 60", confidence=0.95)]
 
 
 def _seed_analyzable_source(db, name: str) -> tuple[Source, ProcessingJob]:
@@ -164,7 +164,7 @@ def _verification_event(db, job_id: int):
 
 
 def test_mid_confidence_knowledge_is_accepted_when_on_screen_text_corroborates_it() -> None:
-    """A silent source whose sets/reps are only on screen still completes (architecture section 23)."""
+    """A silent video whose facts are only on screen still completes (architecture section 23)."""
     with SessionLocal() as db:
         source, job = _seed_analyzable_source(db, "verified-silent")
         updated = analyze_source(
@@ -173,7 +173,7 @@ def test_mid_confidence_knowledge_is_accepted_when_on_screen_text_corroborates_i
             speech_provider=None,
             ocr_provider=SilentOCRProvider(),
             vision_provider=FakeVisionProvider(),
-            extraction_provider=MidConfidenceExtractionProvider("Bulgarian Split Squat"),
+            extraction_provider=MidConfidenceExtractionProvider("Reciprocal Rank Fusion"),
         )
         assert updated.status == JobStatus.completed
         assert db.get(Source, source.id).status == SourceStatus.completed
@@ -189,10 +189,10 @@ def test_mid_confidence_knowledge_without_corroboration_is_routed_to_review() ->
             speech_provider=None,
             ocr_provider=SilentOCRProvider(),
             vision_provider=FakeVisionProvider(),
-            extraction_provider=MidConfidenceExtractionProvider("Barbell Back Squat"),
+            extraction_provider=MidConfidenceExtractionProvider("Vector Quantisation"),
         )
         assert updated.status == JobStatus.needs_review
         assert db.get(Source, source.id).status == SourceStatus.needs_review
         event = _verification_event(db, job.id)
         assert event.event_type == "needs_review"
-        assert "workout_exercise.exercise" in event.message
+        assert "key_points.topic" in event.message

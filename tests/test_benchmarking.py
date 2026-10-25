@@ -8,15 +8,15 @@ client = TestClient(app)
 
 OWNER = {"X-User-Id": "benchmark-owner"}
 
-# The section 55 experiment: silent workout Sources whose sets and reps exist only as on-screen text.
+# The section 55 experiment: silent slide videos whose figures exist only as on-screen text.
 SILENT_CASES = [
-    {"exercise": "Bulgarian Split Squat", "sets": 3, "reps": "10 each leg"},
-    {"exercise": "Barbell Back Squat", "sets": 4, "reps": "8-10"},
-    {"exercise": "Romanian Deadlift", "sets": 3, "reps": "12"},
+    {"topic": "Reciprocal Rank Fusion", "slide": 3, "value": "k = 60"},
+    {"topic": "BM25 Scoring", "slide": 4, "value": "k1 = 1.2"},
+    {"topic": "Chunk Overlap", "slide": 3, "value": "200 characters"},
 ]
 
 
-def _case(ground_truth: dict, category: str = "silent_workout") -> int:
+def _case(ground_truth: dict, category: str = "silent_slides") -> int:
     response = client.post(
         "/api/evaluations/cases",
         json={"category": category, "ground_truth": ground_truth},
@@ -46,23 +46,23 @@ def _submit(run_id: int, predictions: list[tuple[int, dict]], latency: float = 1
 
 
 def test_a_run_records_accuracy_latency_and_cost() -> None:
-    case_id = _case({"exercise": "Barbell Back Squat", "sets": 4})
+    case_id = _case({"topic": "BM25 Scoring", "slide": 4})
     run_id = _run("opus-with-ocr", {"vision_model": "claude-opus-5", "uses_ocr": True})
-    _submit(run_id, [(case_id, {"exercise": "Barbell Back Squat", "sets": 3})], latency=250.0)
+    _submit(run_id, [(case_id, {"topic": "BM25 Scoring", "slide": 3})], latency=250.0)
 
     summary = client.get(f"/api/evaluations/runs/{run_id}", headers=OWNER).json()
     assert summary["scored_cases"] == 1
-    assert summary["exact_field_accuracy"] == 0.5  # exercise matched, sets did not
+    assert summary["exact_field_accuracy"] == 0.5  # topic matched, slide did not
     assert summary["average_latency_ms"] == 250.0
     assert summary["total_cost_usd"] == 0.01
-    assert summary["by_category"][0]["category"] == "silent_workout"
+    assert summary["by_category"][0]["category"] == "silent_slides"
 
 
 def test_resubmitting_a_case_replaces_rather_than_duplicates_it() -> None:
-    case_id = _case({"exercise": "Front Squat", "sets": 5})
+    case_id = _case({"topic": "Query Rewriting", "slide": 5})
     run_id = _run("resubmit-run", {"vision_model": "small"})
-    _submit(run_id, [(case_id, {"exercise": "Wrong", "sets": 1})])
-    _submit(run_id, [(case_id, {"exercise": "Front Squat", "sets": 5})])
+    _submit(run_id, [(case_id, {"topic": "Wrong", "slide": 1})])
+    _submit(run_id, [(case_id, {"topic": "Query Rewriting", "slide": 5})])
 
     summary = client.get(f"/api/evaluations/runs/{run_id}", headers=OWNER).json()
     assert summary["scored_cases"] == 1
@@ -79,7 +79,7 @@ def test_duplicate_run_labels_are_rejected() -> None:
 
 def test_benchmarking_ranks_models_by_accuracy() -> None:
     """The section 54 table: several configurations, ordered by how well they extract."""
-    cases = [_case(truth, category="benchmark_workout") for truth in SILENT_CASES]
+    cases = [_case(truth, category="benchmark_slides") for truth in SILENT_CASES]
 
     strong = _run("strong-vlm", {"vision_model": "claude-opus-5"})
     _submit(strong, list(zip(cases, SILENT_CASES)), latency=900.0)  # all three exactly right
@@ -89,15 +89,15 @@ def test_benchmarking_ranks_models_by_accuracy() -> None:
         weak,
         [
             (cases[0], SILENT_CASES[0]),
-            (cases[1], {"exercise": "Wrong", "sets": 1, "reps": "5"}),
-            (cases[2], {"exercise": "Wrong", "sets": 1, "reps": "5"}),
+            (cases[1], {"topic": "Wrong", "slide": 1, "value": "none"}),
+            (cases[2], {"topic": "Wrong", "slide": 1, "value": "none"}),
         ],
         latency=120.0,
     )
 
     comparison = client.get(
         "/api/evaluations/runs/compare",
-        params={"run_ids": f"{strong},{weak}", "category": "benchmark_workout"},
+        params={"run_ids": f"{strong},{weak}", "category": "benchmark_slides"},
         headers=OWNER,
     ).json()
 
@@ -114,10 +114,10 @@ def test_the_ablation_answers_how_much_ocr_contributes() -> None:
     cases = [_case(truth, category="ablation_silent") for truth in SILENT_CASES]
 
     without_ocr = _run("vlm-only", {"vision_model": "claude-opus-5", "uses_ocr": False})
-    # Without on-screen text the movement is recognisable but sets and reps are not.
+    # Without on-screen text the topic is recognisable but the figures are not.
     _submit(
         without_ocr,
-        [(case_id, {"exercise": truth["exercise"]}) for case_id, truth in zip(cases, SILENT_CASES)],
+        [(case_id, {"topic": truth["topic"]}) for case_id, truth in zip(cases, SILENT_CASES)],
     )
 
     with_ocr = _run("vlm-plus-ocr", {"vision_model": "claude-opus-5", "uses_ocr": True})
@@ -143,14 +143,14 @@ def test_the_ablation_answers_how_much_ocr_contributes() -> None:
 
 def test_comparison_uses_only_cases_both_runs_scored() -> None:
     """Otherwise a difference in coverage would be reported as a difference in quality."""
-    shared = _case({"exercise": "Lunge", "sets": 3}, category="coverage")
-    extra = _case({"exercise": "Plank", "sets": 2}, category="coverage")
+    shared = _case({"topic": "Reranking", "slide": 3}, category="coverage")
+    extra = _case({"topic": "Prompt Caching", "slide": 2}, category="coverage")
 
     broad = _run("broad-coverage", {"uses_ocr": True})
-    _submit(broad, [(shared, {"exercise": "Lunge", "sets": 3}), (extra, {"exercise": "Plank", "sets": 2})])
+    _submit(broad, [(shared, {"topic": "Reranking", "slide": 3}), (extra, {"topic": "Prompt Caching", "slide": 2})])
 
     narrow = _run("narrow-coverage", {"uses_ocr": False})
-    _submit(narrow, [(shared, {"exercise": "Lunge", "sets": 3})])
+    _submit(narrow, [(shared, {"topic": "Reranking", "slide": 3})])
 
     comparison = client.get(
         "/api/evaluations/runs/compare",
@@ -170,7 +170,7 @@ def test_a_regression_is_reported_as_a_regression() -> None:
     good = _run("good-run", {"version": "v1"})
     _submit(good, list(zip(cases, SILENT_CASES[:2])))
     bad = _run("bad-run", {"version": "v2"})
-    _submit(bad, [(cases[0], SILENT_CASES[0]), (cases[1], {"exercise": "Wrong"})])
+    _submit(bad, [(cases[0], SILENT_CASES[0]), (cases[1], {"topic": "Wrong"})])
 
     delta = client.get(
         "/api/evaluations/runs/compare",
@@ -221,8 +221,8 @@ def test_a_prediction_for_someone_elses_case_is_refused() -> None:
 
 
 def test_deleting_a_run_removes_its_predictions() -> None:
-    case_id = _case({"exercise": "Step Up", "sets": 3})
+    case_id = _case({"topic": "Vector Quantisation", "slide": 3})
     run_id = _run("temporary-run", {})
-    _submit(run_id, [(case_id, {"exercise": "Step Up", "sets": 3})])
+    _submit(run_id, [(case_id, {"topic": "Vector Quantisation", "slide": 3})])
     assert client.delete(f"/api/evaluations/runs/{run_id}", headers=OWNER).status_code == 204
     assert client.get(f"/api/evaluations/runs/{run_id}", headers=OWNER).status_code == 404

@@ -39,18 +39,18 @@ def test_ocr_keeps_lines_as_separate_statements() -> None:
     engine = FakeRapidOCR(
         {
             "frame_00001.jpg": [
-                ([[0, 0], [10, 0], [10, 5], [0, 5]], "BULGARIAN SPLIT SQUAT", 0.98),
-                ([[0, 6], [10, 6], [10, 11], [0, 11]], "3 x 10 EACH LEG", 0.95),
+                ([[0, 0], [10, 0], [10, 5], [0, 5]], "RECIPROCAL RANK FUSION", 0.98),
+                ([[0, 6], [10, 6], [10, 11], [0, 11]], "K = 60", 0.95),
             ]
         }
     )
     result = _provider_with(engine).extract([Path("frames/frame_00001.jpg")])
 
     assert len(result) == 1
-    assert result[0].text == "BULGARIAN SPLIT SQUAT\n3 x 10 EACH LEG"
+    assert result[0].text == "RECIPROCAL RANK FUSION\nK = 60"
     assert result[0].confidence == pytest.approx((0.98 + 0.95) / 2)
     assert len(result[0].bounding_boxes) == 2
-    assert result[0].bounding_boxes[0]["text"] == "BULGARIAN SPLIT SQUAT"
+    assert result[0].bounding_boxes[0]["text"] == "RECIPROCAL RANK FUSION"
 
 
 def test_low_confidence_lines_are_dropped() -> None:
@@ -89,27 +89,27 @@ def test_a_malformed_polygon_does_not_break_the_observation() -> None:
 # --------------------------------------------------------------- vision JSON
 
 def test_plain_json_is_parsed() -> None:
-    assert _parse_json('{"description": "a squat", "confidence": 0.9}')["confidence"] == 0.9
+    assert _parse_json('{"description": "a slide", "confidence": 0.9}')["confidence"] == 0.9
 
 
 def test_fenced_json_is_recovered() -> None:
-    payload = 'Sure!\n```json\n{"description": "a squat"}\n```\nHope that helps.'
-    assert _parse_json(payload) == {"description": "a squat"}
+    payload = 'Sure!\n```json\n{"description": "a slide"}\n```\nHope that helps.'
+    assert _parse_json(payload) == {"description": "a slide"}
 
 
 def test_json_surrounded_by_prose_is_recovered() -> None:
-    payload = 'Here is the result: {"description": "a squat", "sets": 3} — let me know.'
-    assert _parse_json(payload)["sets"] == 3
+    payload = 'Here is the result: {"description": "a slide", "topic": "fusion"} — let me know.'
+    assert _parse_json(payload)["topic"] == "fusion"
 
 
 def test_unparsable_output_returns_none_rather_than_guessing() -> None:
-    assert _parse_json("I think it is probably a squat, but I am not sure.") is None
+    assert _parse_json("I think it is probably a slide, but I am not sure.") is None
     assert _parse_json("") is None
 
 
 def test_a_json_list_is_rejected() -> None:
     """The schema is an object; a list would silently break every downstream field read."""
-    assert _parse_json('["squat", "deadlift"]') is None
+    assert _parse_json('["slide", "chart"]') is None
 
 
 def test_vision_provider_reports_zero_confidence_without_frames() -> None:

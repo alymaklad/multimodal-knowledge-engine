@@ -16,6 +16,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.providers.base import (
+    KEY_POINTS_CONTENT_TYPE,
     ExtractionProvider,
     ExtractionResult,
     ImageDescriber,
@@ -48,19 +49,19 @@ VISION_SCHEMA: dict[str, Any] = {
             "maxLength": 600,
             "description": "What happens across the frames, in order. Two or three sentences.",
         },
-        "content_kind": {"type": "string", "enum": ["workout", "ai_technical", "other"]},
-        "exercise": {"type": ["string", "null"], "maxLength": 120, "description": "Exercise performed, or null."},
-        "equipment": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 60}},
-        "target_muscles": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 60}},
-        "sets": {"type": ["integer", "null"]},
-        "reps": {"type": ["string", "null"], "maxLength": 60},
-        "duration_seconds": {"type": ["number", "null"]},
-        "rest_seconds": {"type": ["number", "null"]},
-        "tempo": {"type": ["string", "null"], "maxLength": 60, "description": "Only if explicitly stated."},
-        "technique_notes": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 200}},
-        "warnings": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 200}},
-        "topic": {"type": ["string", "null"], "maxLength": 120, "description": "Technical topic, for non-workout content."},
-        "technologies": {"type": "array", "maxItems": 15, "items": {"type": "string", "maxLength": 60}},
+        "topic": {"type": ["string", "null"], "maxLength": 120, "description": "What the video is about, in a few words."},
+        "key_points": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "maxLength": 200},
+            "description": "The main things the video shows or says, one claim each.",
+        },
+        "entities": {
+            "type": "array",
+            "maxItems": 15,
+            "items": {"type": "string", "maxLength": 80},
+            "description": "People, products, tools, places, or terms the video names.",
+        },
         "evidence": {
             "type": "object",
             "description": "Field name mapped to the evidence type that supports it.",
@@ -68,7 +69,7 @@ VISION_SCHEMA: dict[str, Any] = {
         },
         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
     },
-    "required": ["description", "content_kind", "evidence", "confidence"],
+    "required": ["description", "evidence", "confidence"],
     "additionalProperties": False,
 }
 
@@ -80,8 +81,21 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "content_type": {"type": "string", "enum": ["workout_exercise", "ai_knowledge"]},
-                    "data": {"type": "object", "additionalProperties": True},
+                    "content_type": {"type": "string", "enum": [KEY_POINTS_CONTENT_TYPE]},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": ["string", "null"]},
+                            "key_points": {"type": "array", "items": {"type": "string"}},
+                            "entities": {"type": "array", "items": {"type": "string"}},
+                            "evidence": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string", "enum": EVIDENCE_TYPES},
+                            },
+                        },
+                        "required": ["topic", "key_points", "entities", "evidence"],
+                        "additionalProperties": False,
+                    },
                     "text_representation": {
                         "type": "string",
                         "description": "Readable sentences describing the record, used for embedding.",
@@ -173,7 +187,7 @@ class ClaudeVisionProvider(VisionProvider):
             model=self._model,
             max_tokens=self._max_tokens,
             system=(
-                "You analyse short vertical videos for a personal knowledge base. You report only "
+                "You analyse videos for a personal knowledge base. You report only "
                 "what the supplied evidence shows. A missing value is always better than a guessed one."
             ),
             messages=[{"role": "user", "content": content}],
@@ -194,11 +208,12 @@ class ClaudeVisionProvider(VisionProvider):
     @staticmethod
     def _instruction(transcript: str, ocr_text: str) -> str:
         return (
-            "The frames above are sampled in order from one short video.\n\n"
+            "The frames above are sampled in order from one video.\n\n"
             "ON-SCREEN TEXT (OCR):\n" + (ocr_text or "(none detected)") + "\n\n"
             "TRANSCRIPT:\n" + (transcript or "(this video has no speech)") + "\n\n"
-            "Describe what happens across the frames as a sequence, then fill in only the fields "
-            "the evidence actually supports.\n\n" + NO_INVENTION_RULE
+            "Describe what happens across the frames as a sequence. Then give its topic, its key "
+            "points, and the entities it names, filling in only what the evidence actually "
+            "supports.\n\n" + NO_INVENTION_RULE
         )
 
 
@@ -216,7 +231,7 @@ class ClaudeExtractionProvider(ExtractionProvider):
             model=self._model,
             max_tokens=self._max_tokens,
             system=(
-                "You normalise multimodal evidence about one short video into structured records. "
+                "You normalise multimodal evidence about one video into a structured record. "
                 "You never add a fact that is not present in the evidence you were given."
             ),
             messages=[{"role": "user", "content": self._instruction(vision, transcript, ocr_text)}],
@@ -240,9 +255,9 @@ class ClaudeExtractionProvider(ExtractionProvider):
             "VISUAL FIELDS:\n" + json.dumps(vision.analysis, ensure_ascii=False) + "\n\n"
             "ON-SCREEN TEXT (OCR):\n" + (ocr_text or "(none detected)") + "\n\n"
             "TRANSCRIPT:\n" + (transcript or "(this video has no speech)") + "\n\n"
-            "Produce one record per kind of knowledge this video actually contains. Return an empty "
-            "list when the evidence supports nothing. Inside each record's `data`, include an "
-            "`evidence` object mapping each field you filled to the evidence type that supports it.\n\n"
+            "Produce one key-points record for this video: its topic, the main points it makes, and "
+            "the entities it names. Return an empty list when the evidence supports nothing. In "
+            "`evidence`, map each field you filled to the evidence type that supports it.\n\n"
             + NO_INVENTION_RULE
         )
 

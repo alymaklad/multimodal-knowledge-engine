@@ -63,18 +63,16 @@ def test_vision_provider_sends_every_frame_and_both_evidence_streams(tmp_path, m
     frames = _write_frames(tmp_path, 10)
     client = FakeClaudeClient(
         {
-            "description": "A person performs a split squat with a rear foot elevated.",
-            "content_kind": "workout",
-            "exercise": "Bulgarian Split Squat",
-            "equipment": ["dumbbells", "bench"],
-            "sets": 3,
-            "reps": "10 each leg",
-            "evidence": {"exercise": "visual", "sets": "ocr", "reps": "ocr"},
+            "description": "A speaker walks through a slide about reciprocal rank fusion.",
+            "topic": "Reciprocal Rank Fusion",
+            "key_points": ["Fusion sums reciprocal ranks"],
+            "entities": ["BM25", "Qdrant"],
+            "evidence": {"topic": "ocr", "key_points": "visual", "entities": "visual"},
             "confidence": 0.91,
         }
     )
     provider = ClaudeVisionProvider(client=client)
-    result = provider.analyze_video(frames, "", "Bulgarian Split Squat\n3 x 10 each leg")
+    result = provider.analyze_video(frames, "", "RECIPROCAL RANK FUSION\nk = 60")
 
     request = client.requests[0]
     content = request["messages"][0]["content"]
@@ -85,13 +83,13 @@ def test_vision_provider_sends_every_frame_and_both_evidence_streams(tmp_path, m
 
     instruction = content[-1]["text"]
     assert "Do not invent information" in instruction
-    assert "3 x 10 each leg" in instruction
+    assert "k = 60" in instruction
     assert "(this video has no speech)" in instruction
 
-    assert result.description.startswith("A person performs")
+    assert result.description.startswith("A speaker walks")
     assert result.confidence == 0.91
-    assert result.analysis["exercise"] == "Bulgarian Split Squat"
-    assert result.analysis["evidence"]["sets"] == "ocr"
+    assert result.analysis["topic"] == "Reciprocal Rank Fusion"
+    assert result.analysis["evidence"]["topic"] == "ocr"
     assert result.analysis["frame_count"] == 3
     assert result.analysis["frames_available"] == 10
     get_settings.cache_clear()
@@ -110,26 +108,27 @@ def test_extraction_provider_returns_structured_records() -> None:
         {
             "records": [
                 {
-                    "content_type": "workout_exercise",
+                    "content_type": "key_points",
                     "data": {
-                        "exercise": "Bulgarian Split Squat",
-                        "sets": 3,
-                        "evidence": {"exercise": "visual", "sets": "ocr"},
+                        "topic": "Reciprocal Rank Fusion",
+                        "key_points": ["Fusion sums reciprocal ranks"],
+                        "entities": [],
+                        "evidence": {"topic": "ocr", "key_points": "visual"},
                     },
-                    "text_representation": "Bulgarian Split Squat. 3 sets.",
+                    "text_representation": "Topic: Reciprocal Rank Fusion. Fusion sums reciprocal ranks.",
                     "confidence": 0.88,
                 }
             ]
         }
     )
-    vision = VisionResult(description="Split squat", analysis={"exercise": "Bulgarian Split Squat"})
-    results = ClaudeExtractionProvider(client=client).extract(vision, "", "3 x 10")
+    vision = VisionResult(description="A slide about fusion", analysis={"topic": "Reciprocal Rank Fusion"})
+    results = ClaudeExtractionProvider(client=client).extract(vision, "", "k = 60")
 
     assert client.requests[0]["output_config"]["format"]["schema"] is EXTRACTION_SCHEMA
     assert "Do not invent information" in client.requests[0]["messages"][0]["content"]
     assert len(results) == 1
-    assert results[0].content_type == "workout_exercise"
-    assert results[0].data["evidence"]["sets"] == "ocr"
+    assert results[0].content_type == "key_points"
+    assert results[0].data["evidence"]["topic"] == "ocr"
     assert results[0].confidence == 0.88
 
 
@@ -141,30 +140,30 @@ def test_extraction_provider_accepts_an_empty_record_list() -> None:
 
 def _result(confidence: float, data: dict) -> ExtractionResult:
     return ExtractionResult(
-        content_type="workout_exercise", data=data, text_representation="x", confidence=confidence
+        content_type="key_points", data=data, text_representation="x", confidence=confidence
     )
 
 
 def test_high_confidence_is_accepted_without_verification() -> None:
-    outcome = verify_extractions([_result(0.93, {"exercise": "Squat"})])
+    outcome = verify_extractions([_result(0.93, {"topic": "Rank fusion"})])
     assert outcome.decision is ReviewDecision.accepted
     assert outcome.requires_review is False
 
 
 def test_low_confidence_goes_straight_to_review() -> None:
-    outcome = verify_extractions([_result(0.42, {"exercise": "Squat"})], ocr_text="Squat")
+    outcome = verify_extractions([_result(0.42, {"topic": "Rank fusion"})], ocr_text="Rank fusion")
     assert outcome.decision is ReviewDecision.needs_review
 
 
 def test_absent_knowledge_requires_review() -> None:
     assert verify_extractions([]).decision is ReviewDecision.needs_review
-    assert verify_extractions([_result(None, {"exercise": "Squat"})]).decision is ReviewDecision.needs_review
+    assert verify_extractions([_result(None, {"topic": "Rank fusion"})]).decision is ReviewDecision.needs_review
 
 
 def test_mid_confidence_is_promoted_when_evidence_corroborates_it() -> None:
     outcome = verify_extractions(
-        [_result(0.7, {"exercise": "Bulgarian Split Squat", "sets": 3})],
-        ocr_text="Bulgarian Split Squat\n3 sets",
+        [_result(0.7, {"topic": "Reciprocal Rank Fusion", "parameter": "k = 60"})],
+        ocr_text="Reciprocal Rank Fusion\nk = 60",
     )
     assert outcome.decision is ReviewDecision.verified
     assert outcome.requires_review is False
@@ -173,16 +172,16 @@ def test_mid_confidence_is_promoted_when_evidence_corroborates_it() -> None:
 
 def test_mid_confidence_falls_back_to_review_when_nothing_corroborates_it() -> None:
     outcome = verify_extractions(
-        [_result(0.7, {"exercise": "Barbell Back Squat"})], ocr_text="unrelated caption"
+        [_result(0.7, {"topic": "Vector quantisation"})], ocr_text="unrelated caption"
     )
     assert outcome.decision is ReviewDecision.needs_review
-    assert "Barbell Back Squat" not in outcome.reason
-    assert "workout_exercise.exercise" in outcome.reason
+    assert "Vector quantisation" not in outcome.reason
+    assert "key_points.topic" in outcome.reason
 
 
 def test_an_ocr_tagged_field_counts_as_corroborated() -> None:
     outcome = verify_extractions(
-        [_result(0.7, {"exercise": "Squat", "evidence": {"exercise": "ocr"}})], ocr_text=""
+        [_result(0.7, {"topic": "Rank fusion", "evidence": {"topic": "ocr"}})], ocr_text=""
     )
     assert outcome.decision is ReviewDecision.verified
 

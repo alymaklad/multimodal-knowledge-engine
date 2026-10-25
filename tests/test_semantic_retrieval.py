@@ -19,7 +19,7 @@ def _seed_source(collection_id: int, url: str, transcript: str, extracted: str) 
         db.add(
             ExtractedContent(
                 source_id=source_id,
-                content_type="ai_knowledge",
+                content_type="key_points",
                 data={"topic": "retrieval"},
                 text_representation=extracted,
                 confidence=0.8,
@@ -44,7 +44,7 @@ def test_semantic_and_hybrid_search_return_indexed_sources() -> None:
         collection_id,
         "https://example.com/source/SEM001/",
         "This clip explains hybrid search combining BM25 with dense vectors in Qdrant.",
-        "topic: hybrid search. technologies: BM25, Qdrant",
+        "topic: hybrid search. entities: BM25, Qdrant",
     )
     _seed_source(
         collection_id,
@@ -87,7 +87,7 @@ def test_reprocessing_discards_stale_vectors() -> None:
 
 def test_near_duplicate_detection_pairs_identical_content() -> None:
     collection_id = client.post("/api/collections", json={"name": "Duplicates"}).json()["id"]
-    text = "Barbell back squat. 4 sets of 8 repetitions targeting quadriceps and glutes."
+    text = "Reciprocal rank fusion sums reciprocal ranks from each retriever with a constant of sixty."
     first = _seed_source(collection_id, "https://example.com/source/DUP001/", text, text)
     second = _seed_source(collection_id, "https://example.com/source/DUP002/", text, text)
     client.post(f"/api/collections/{collection_id}/index")

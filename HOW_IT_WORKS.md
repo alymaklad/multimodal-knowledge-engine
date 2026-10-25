@@ -1,775 +1,358 @@
 # How the Multimodal Knowledge Engine Works
 
-A personal knowledge engine that turns your sources into structured, searchable knowledge. It
-began with Instagram Reels, which is what the rest of this guide still describes while the project
-is generalised to documents, web pages, images, and audio.
-
-This document has two parts:
-
-- **[Part 1 — Technical](#part-1--technical)** — the architecture, the pipeline, and why it is built this way.
-- **[Part 2 — Using the app](#part-2--using-the-app)** — what each screen does and how to drive it.
+A technical guide to the internals: how a source becomes cited evidence, how questions are answered
+from it, and why each piece is built the way it is. [README.md](README.md) covers setup, the API,
+and configuration; this document covers the reasoning underneath.
 
 ---
 
-## The one principle everything follows
+## The principles everything follows
 
-> Process each Reel **once**, turn it into structured multimodal knowledge, index that knowledge, and
-> let the reasoning layer operate over the knowledge base — never ask the final model to rediscover
-> facts from raw video every time you have a question.
+> **Process each source once, and answer from what processing stored.** A question never sends raw
+> files to a model. It searches knowledge that was extracted, located, and indexed in advance.
 
-A second principle follows from the first, and shapes almost every design decision below:
+> **Every claim must be traceable to its evidence.** Passages remember where in the source they came
+> from; answers cite passages, not whole sources; a citation that points at nothing is removed; an
+> extracted value that nothing corroborates is marked as inferred and sent for review.
 
-> **Every fact must be traceable to its source.** A value that cannot be attributed to on-screen
-> text, speech, or something visible in the frames is either tagged as inferred or not recorded.
+> **Failure is recorded, never hidden.** A stage that fails keeps what the others produced and says
+> so. A chat answer that fails, is refused, or is cut off by a disconnect is stored as exactly that.
 
 ---
 
-# Part 1 — Technical
+## 1. The life of a source
 
-## 1.1 The four layers
+Every source has one `ProcessingJob`, and the job's `current_stage` is a small state machine. The
+HTTP request only creates the job; workers move it forward.
 
-```mermaid
-flowchart TD
-    P["PERCEPTION<br/>video · audio · frames · OCR · metadata"]
-    U["UNDERSTANDING<br/>speech-to-text · vision · structured extraction"]
-    K["KNOWLEDGE<br/>relational database · vector index · object storage"]
-    R["REASONING<br/>retrieval · grounded answering · reports · planning"]
+```text
+                    ┌──────────── web / youtube ────────────┐
+                    │                                        ▼
+ingestion ──────────┤                                     fetching ──┐
+ (queued)           │                                                │
+                    ├── document / image / audio / text ─────────────┤
+                    │                                                ▼
+                    │                                       awaiting_processor ──▶ content_extraction ──▶ completed
+                    │
+                    └── video ──▶ media_preparation ──▶ ocr_and_transcription ──▶ multimodal_analysis ──▶ completed
+                                                         (queued)                                       or needs_review
 
-    P --> U --> K --> R
-
-    style P fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style U fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style K fill:#171a21,stroke:#57c98a,color:#e2e5f0
-    style R fill:#171a21,stroke:#e0b356,color:#e2e5f0
+any stage ──▶ failed  (with the reason, on the job and the source)
 ```
 
-Each layer is replaceable without touching the others. That separation is what lets the whole system
-run with **no API key and no model weights** on its local defaults, and upgrade to real models purely
-through configuration.
+`start_source_job` (`app/workers/pipeline.py`) is the single entry point for every kind; the Celery
+task `sources.start` and the local runner both call it. Every stage is **retry-safe**: it replaces
+its own earlier output, so a job can be run again after a crash without duplicating anything. The
+local runner relies on this to resume work at startup.
+
+### Ingestion
+
+- **Uploads** stream to `MEDIA_ROOT` while being hashed with SHA-256. The extension decides the kind
+  (`app/services/source_types.py`); the first chunk must carry that format's signature (`%PDF-`,
+  `PK\x03\x04`, `\x89PNG`, `ftyp`, …), text is decoded as UTF-8 incrementally as it streams, and a
+  DOCX must contain `word/document.xml`. A mismatch is a `415`, and the partial file is deleted.
+- **Links** are normalised before the duplicate check (`app/services/links.py`). Fragments and
+  default ports go; every YouTube form becomes `https://www.youtube.com/watch?v=<id>`. Links with
+  credentials, non-HTTP schemes, or obviously private hosts are refused up front.
+- **Pasted text** is written to a file, so every kind is processed from a file on disk.
+- Duplicates are detected **per owner, across the whole library** - by content hash for files and
+  text, by normalised URL for links - because a source belongs to the library, not to a collection.
+
+### Fetching
+
+`app/services/fetching.py` runs in the worker, because opening a connection to a URL the user
+supplied must have timeouts and network checks, and must not block a request.
+
+- **Web pages.** Redirects are followed manually, one hop at a time, so each `Location` is checked
+  again. Before every hop, the host is resolved and **every** returned address must be globally
+  routable (IPv4-mapped IPv6 and link-local zones included); otherwise the fetch stops. Bodies are
+  streamed with a hard size cap and limited to HTML, text, Markdown, and PDF. The `<title>` (or
+  `og:title`) replaces the placeholder title unless the user typed one.
+- **YouTube.** The caption track is fetched through `youtube-transcript-api`, choosing written
+  captions in a preferred language, then generated ones, then any language, and saved as JSON with
+  timestamps. oEmbed supplies the title and channel. Nothing is downloaded.
+
+The resolution check and the connection are separate DNS lookups; pinning the connection to the
+checked address would close the remaining rebinding window. For a personal install the check is the
+proportionate defence, and the limitation is stated rather than hidden.
 
 ---
 
-## 1.2 End-to-end pipeline
+## 2. Processors: from a file to located segments
 
-```mermaid
-flowchart TD
-    A["POST /api/reels<br/>or /api/reels/upload"] --> B["Reel: pending<br/>Job: queued, stage=ingestion"]
-    B --> C{"Local media<br/>available?"}
-    C -->|"no — URL only"| C1["Waits. Dispatch is refused:<br/>there is nothing to process"]
-    C -->|yes| D["POST /api/jobs/{id}/dispatch"]
-    D --> E["Celery task: reels.prepare_media"]
+A processor (`app/processors/`) turns a stored file into **segments**: a passage of text, its
+modality, and a **locator** saying where it came from.
 
-    E --> F["ffprobe: duration, dimensions, has audio"]
-    F --> G["ffmpeg: 16kHz mono WAV<br/>only if audio exists"]
-    F --> H["ffmpeg: sampled JPEG frames<br/>1 fps, max 120"]
-    G --> I["MediaAsset rows"]
-    H --> I
-    I --> J["Publish to object store<br/>StoredObject rows"]
-    J --> K["Job: queued, stage=ocr_and_transcription"]
-
-    K --> L["Celery task: reels.analyze_media"]
-    L --> M["Four isolated analysis stages"]
-    M --> N["Embed and index every chunk"]
-    N --> O["Record model provenance"]
-    O --> P{"Confidence<br/>routing"}
-    P -->|accepted or verified| Q["Reel: completed"]
-    P -->|below threshold, or a stage failed| R["Reel: needs_review"]
-
-    style Q fill:#171a21,stroke:#57c98a,color:#e2e5f0
-    style R fill:#171a21,stroke:#e0b356,color:#e2e5f0
-    style C1 fill:#171a21,stroke:#71757f,color:#a7abb5
-```
-
-**Nothing is scraped from Instagram.** A submitted URL is recorded as a reference; media enters the
-system only when the user uploads it. That is a deliberate policy boundary, not a missing feature.
-
-The HTTP request never runs the pipeline. It writes a durable `ProcessingJob` and returns `202`;
-Celery workers claim the job later. That job row is the handoff boundary between the API and the
-workers.
-
----
-
-## 1.3 The analysis stage — four stages that fail independently
-
-This is the most important implementation detail in the system.
-
-```mermaid
-flowchart LR
-    A["Audio + frames"] --> T["1 · Transcription"]
-    T --> O["2 · OCR"]
-    O --> V["3 · Vision"]
-    V --> X["4 · Extraction"]
-    X --> Y["Structured records"]
-
-    T -.->|"fails → empty transcript"| O
-    O -.->|"fails → empty OCR text"| V
-    V -.->|"fails → try fallback provider"| X
-    X -.->|"fails → keep previous knowledge"| Y
-
-    style T fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style O fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style V fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style X fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-```
-
-Each stage is wrapped so a provider exception cannot abort the run:
-
-| Stage fails | What still happens |
-|---|---|
-| **Transcription** | OCR, vision, and extraction all run. A Reel with perfect on-screen text is not discarded because Whisper broke. |
-| **OCR** | The transcript survives and extraction runs on speech plus vision. |
-| **Vision** | A fallback provider is tried first. If that also fails, extraction still runs on OCR and transcript evidence. |
-| **Extraction** | **Previous knowledge is left intact.** Erasing a good earlier run because a later one broke would be worse than a stale record. |
-
-Two outcomes are deliberately distinguished:
-
-- **`skipped`** — the stage never ran, and that is correct. A silent Reel skips transcription; that is
-  not a fault, and it is excluded from failure-rate maths.
-- **`failed`** — the stage ran and broke. Any failed stage sends the Reel to review regardless of how
-  confident the surviving extraction was, because the knowledge now rests on partial evidence.
-
-Every attempt writes a `StageMetric` row — status, duration, items processed, model, error — appended
-rather than overwritten, so a retry's improvement over the previous run stays visible.
-
----
-
-## 1.4 Evidence and provenance
-
-Every extracted field carries a tag naming where it came from:
-
-| Tag | Meaning |
-|---|---|
-| `visual` | Seen in the sampled frames |
-| `ocr` | Read from on-screen text |
-| `transcript` | Spoken aloud |
-| `metadata` | From the Reel record itself |
-| `inferred` | Concluded rather than observed |
-
-`inferred` is the one to distrust, and the interface renders it deliberately weaker. The tags live in
-the record's `data.evidence` map, so no schema change was needed to carry them.
-
-**The silent-video case** is what this design exists for:
-
-```mermaid
-flowchart LR
-    S["Silent Reel"] --> F["Frame sampling"]
-    F --> O["OCR reads<br/>'BULGARIAN SPLIT SQUAT'<br/>'3 x 10 EACH LEG'"]
-    F --> V["Vision identifies<br/>the movement"]
-    O --> E["sets = 3 · evidence: ocr<br/>reps = 10 each leg · evidence: ocr"]
-    V --> E2["exercise = Bulgarian Split Squat<br/>evidence: visual"]
-    E --> R["One structured record,<br/>each field attributable"]
-    E2 --> R
-
-    style R fill:#171a21,stroke:#57c98a,color:#e2e5f0
-```
-
-Separately, a `ProcessingProvenance` row records the **model set that produced the knowledge** —
-transcription model, vision model, embedding model, OCR and extraction providers, and the extraction
-prompt version. It is built by reading back what the run actually persisted, not from configuration
-as it stands when someone later inspects it. Without this, an evaluation result cannot be attributed
-to the setup that produced it.
-
----
-
-## 1.5 Confidence routing
-
-Three tiers rather than one threshold:
-
-```mermaid
-flowchart TD
-    C["Extraction confidence"] --> H{"> 0.85?"}
-    H -->|yes| A["ACCEPTED<br/>no human needed"]
-    H -->|no| M{"between<br/>0.60 and 0.85?"}
-    M -->|yes| S["Secondary verification"]
-    M -->|no| N["NEEDS REVIEW<br/>below the review threshold"]
-
-    S --> Q{"Is the value spelled out<br/>in stored OCR or transcript text?"}
-    Q -->|yes| V["VERIFIED<br/>corroborated, completes"]
-    Q -->|no| N2["NEEDS REVIEW<br/>rests on inference alone"]
-
-    style A fill:#171a21,stroke:#57c98a,color:#e2e5f0
-    style V fill:#171a21,stroke:#e0b356,color:#e2e5f0
-    style N fill:#171a21,stroke:#e0b356,color:#e2e5f0
-    style N2 fill:#171a21,stroke:#e0b356,color:#e2e5f0
-```
-
-The middle tier implements the cheapest honest verification strategy: check mid-confidence values
-against the literal OCR and transcript text already stored. A value spelled out on screen or spoken
-aloud is corroborated; one resting on inference alone goes to a human. Running a second, stronger
-model is the natural upgrade and fits the same interface.
-
-The decision **and its reason** are written to the job event history, so a routing outcome can be
-explained after the fact rather than inferred from the final status.
-
-Thresholds: `AUTO_ACCEPT_CONFIDENCE` (0.85) and `AUTO_REVIEW_CONFIDENCE` (0.60).
-
----
-
-## 1.6 Embedding and indexing
-
-Each modality is embedded as its **own chunk**, so a retrieval hit can be attributed to the evidence
-that produced it rather than to the Reel as an opaque blob:
-
-```mermaid
-flowchart LR
-    R["Analysed Reel"] --> C1["transcript"]
-    R --> C2["ocr"]
-    R --> C3["visual"]
-    R --> C4["extracted:workout_exercise<br/>extracted:ai_knowledge"]
-    R --> C5["summary<br/>creator + caption + everything above"]
-
-    C1 --> E["Embedding provider"]
-    C2 --> E
-    C3 --> E
-    C4 --> E
-    C5 --> E
-    E --> S["Vector store"]
-
-    style S fill:#171a21,stroke:#57c98a,color:#e2e5f0
-```
-
-Keys are identical across backends, so moving from the relational store to Qdrant does not rewrite
-them. The `summary` chunk doubles as the near-duplicate signal: two Reels whose summary vectors
-exceed `DUPLICATE_SIMILARITY_THRESHOLD` (0.92) are reported as near-duplicates. Exact re-uploads are
-already blocked at ingestion by URL and SHA-256 media hash; this catches the same content saved from
-a different post or re-encoded.
-
----
-
-## 1.7 Retrieval
-
-Three modes over the same evidence:
-
-```mermaid
-flowchart TD
-    Q["Query"] --> L["Lexical<br/>exact term occurrence counts"]
-    Q --> D["Dense<br/>embed query, cosine over chunks"]
-    L --> F["Reciprocal rank fusion<br/>k = 60"]
-    D --> F
-    F --> RR["Reranker<br/>scores a wider candidate window"]
-    RR --> P["Page of results"]
-
-    style F fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style RR fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-```
-
-**Why rank fusion rather than adding scores:** lexical occurrence counts and cosine similarities are
-not on a comparable scale. Only their *orderings* can be combined meaningfully.
-
-**Why the reranker over-fetches:** its whole value is promoting something the earlier stages ranked
-just below the cut, so it scores `RERANK_CANDIDATES` (30) candidates before trimming to the requested
-page size.
-
-Results can be narrowed by `content_type`, `creator`, and `topic`. Topics come from extracted
-knowledge, so a filter matches what analysis actually found rather than a free-text tag. When a
-filter is active, dense retrieval over-fetches so post-filtering cannot empty the page.
-
-| Mode | Best for |
-|---|---|
-| `lexical` | Exact technical strings — `QLoRA`, `BM25`, `Qdrant` |
-| `semantic` | Meaning, when you don't know the exact wording |
-| `hybrid` | The default — both, fused then reranked |
-
----
-
-## 1.8 Grounded answering
-
-```mermaid
-flowchart TD
-    Q["Question"] --> R["Retrieve evidence chunks"]
-    R --> C{"Anything<br/>retrieved?"}
-    C -->|no| N["Refuse.<br/>No request is made — nothing<br/>could be grounded"]
-    C -->|yes| A["Answer provider"]
-    A --> V["Intersect returned citations<br/>with the evidence actually supplied"]
-    V --> W{"Any valid<br/>citation left?"}
-    W -->|no| N2["Downgrade to ungrounded"]
-    W -->|yes| G["Grounded answer + sources"]
-
-    style G fill:#171a21,stroke:#57c98a,color:#e2e5f0
-    style N fill:#171a21,stroke:#e0b356,color:#e2e5f0
-    style N2 fill:#171a21,stroke:#e0b356,color:#e2e5f0
-```
-
-Grounding is enforced **structurally, not by prompt alone**. Three mechanisms:
-
-1. Retrieved evidence is the only material supplied.
-2. The prompt forbids outside knowledge.
-3. The citations the model returns are intersected with the evidence that was passed in — a Reel id
-   the retriever never produced is **dropped**, and an answer left with no valid citation is
-   downgraded to ungrounded.
-
-**Reports work the same way in reverse.** Aggregates are computed in the database first, and only
-those counts are sent for narration — the model never sees the Reels themselves, so report cost stays
-flat as a collection grows.
-
----
-
-## 1.9 Storage: working files versus durable objects
-
-FFmpeg, OCR, and the vision model all need real local files, so the object store is **not** a
-drop-in replacement for the media directory:
-
-```mermaid
-flowchart LR
-    U["Upload"] --> W["MEDIA_ROOT<br/>working copies a stage reads"]
-    W --> FF["ffmpeg / ocr / vision"]
-    W --> PUB["Publish after preparation"]
-    PUB --> O["Object store<br/>users/{user_id}/reels/{reel_id}/"]
-    O --> V1["video.mp4"]
-    O --> V2["audio.wav"]
-    O --> V3["frames/frame_00001.jpg"]
-
-    style W fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
-    style O fill:#171a21,stroke:#57c98a,color:#e2e5f0
-```
-
-- **S3/MinIO** issues presigned URLs bounded by `SIGNED_URL_TTL_SECONDS`.
-- **The local backend** returns no signed URL rather than pretending; the API streams those objects
-  through its own ownership check instead. An object is never reachable without authorization on
-  either backend.
-- Publication is idempotent — republishing replaces prior records rather than accumulating entries
-  pointing at frames a newer run has overwritten.
-
----
-
-## 1.10 Provider abstraction
-
-Seven contracts, each with a local default and an upgrade path. **Every default runs with no API key
-and no model weights.**
-
-| Contract | Default | Upgrade |
+| Locator key | Meaning | Example label |
 |---|---|---|
-| `SpeechProvider` | `none` — silent handling | `faster_whisper` with timed segments |
-| `OCRProvider` | `tesseract` | any OCR engine |
-| `VisionProvider` | `evidence` — records what evidence exists, describes no visuals | `claude` — multi-frame visual understanding |
-| `ExtractionProvider` | `rule_based` — deterministic set/rep and AI-term patterns | `claude` — normalises all evidence |
-| `EmbeddingProvider` | `hashing` — dependency-free, **lexical not semantic** | `sentence_transformer` (BGE-M3) |
-| `AnswerProvider` | `extractive` — quotes evidence | `claude` — composes over it |
-| `RerankProvider` | `none` — fusion order stands | `cross_encoder` |
+| `page`, `page_end` | PDF page or span | `p. 4`, `pp. 3–4` |
+| `section` | Heading path | `§ Guide > Install` |
+| `paragraph` | First paragraph of the passage within its section | `¶ 2` |
+| `start`, `end` | Seconds into a recording | `12:30–13:45` |
+| `region` | The whole image | `image` |
 
-Plus two storage backends: `VECTOR_STORE` (`database` | `qdrant`) and `OBJECT_STORE` (`local` | `s3`).
+**Markdown is the common format.** Word documents and web pages are converted to Markdown so that
+one heading-aware splitter (`app/processors/text.py`) serves documents, pages, and pasted text
+alike. A segment never crosses a heading and stays under `SEGMENT_MAX_CHARACTERS`; an overlong
+section is split between paragraphs, an overlong paragraph between sentences, and an overlong
+sentence at the limit.
 
-Model imports are deferred into the factory branch that needs them, so a missing optional package
-cannot break startup for someone running the local baseline.
+- **PDF** (`documents.py`): PDFium extracts text per page. PDFium marks a hyphen it inserted at a
+  line end with `\x02` and drops the line break; the marker is removed so "com-bines" rejoins. A page
+  with fewer than `PDF_OCR_MIN_CHARACTERS` of text is a scan: it is rendered at `PDF_OCR_DPI` and
+  sent to the OCR provider. A page whose OCR fails is a warning, not a failed document.
+- **Web pages** (`web.py`): `trafilatura` extracts the main content when installed. The built-in
+  fallback drops `script`, `style`, `nav`, `header`, `footer`, `aside`, `form`, and `title`, and
+  counts only the tag that opened a skipped region, because real pages leave `<li>` and `<p>`
+  unclosed and counting every tag would never return to zero.
+- **Transcripts** (`media.py`): YouTube captions and Whisper output are grouped into windows that
+  close at `TRANSCRIPT_WINDOW_SECONDS` or the size limit, so a citation points at roughly a minute
+  of a recording.
+- **Images**: OCR text plus, with `VISION_PROVIDER=claude`, a prose description (charts are asked
+  for what they measure and their values). Either one alone is enough; neither is a failure with a
+  hint about what to configure.
 
-**Optional model routing** (`VISION_ROUTING=true`): a cheap classifier over evidence that already
-exists — frame count, presence of speech, presence of on-screen text — picks the model tier *before*
-any model is called, because a router costing a model call to decide which model to call defeats its
-own purpose. Escalation to the stronger model is capped at one retry.
-
----
-
-## 1.11 Data model
-
-20 tables. The ones that carry the design:
-
-| Table | Holds |
-|---|---|
-| `collections`, `reels` | Ownership and ingestion records |
-| `processing_jobs`, `job_events` | Durable work handoff and an append-only history |
-| `media_assets` | **Working** local files a stage reads |
-| `stored_objects` | **Durable** published artifacts — deliberately separate from the above |
-| `transcripts`, `ocr_results`, `visual_analyses` | Perception output, timestamped |
-| `extracted_content` | Structured records with `data.evidence` and confidence |
-| `content_embeddings` | One row per chunk, with the text it came from |
-| `processing_provenance` | Model set per Reel |
-| `stage_metrics` | Per-attempt stage timing and outcome |
-| `evaluation_cases`, `benchmark_runs`, `benchmark_predictions` | Ground truth and model comparison |
-| `extraction_corrections` | Append-only human corrections that never overwrite model output |
-| `users` | PBKDF2 password hashes |
-
-Schema is created with `create_all`, which is why provenance, stored objects, and stage metrics were
-each delivered as a **new table** rather than new columns on `reels`.
+Providers are resolved **lazily** through `ProcessorContext`: a Markdown file never loads an OCR or
+speech model. `process_source_content` replaces the source's segments, records a stage metric
+(`degraded` when there were warnings), records provenance including the processor's models, indexes
+the source, and completes it.
 
 ---
 
-## 1.12 Evaluation and benchmarking
+## 3. Video: multimodal analysis
 
-Scoring one prediction per case cannot tell you *which model produced it*. Benchmark runs add that:
+Video keeps the richer pipeline the project began with.
 
-```mermaid
-flowchart LR
-    C["Evaluation cases<br/>annotated ground truth"] --> R1["Run A<br/>uses_ocr: false"]
-    C --> R2["Run B<br/>uses_ocr: true"]
-    R1 --> S["Score per case"]
-    R2 --> S
-    S --> I["Intersect: cases BOTH runs scored"]
-    I --> D["Accuracy delta<br/>improved / regressed / unchanged<br/>+ which setting differed"]
+1. **Media preparation.** `ffprobe` reads duration and whether there is audio; FFmpeg extracts mono
+   16 kHz WAV and samples frames at `FRAME_SAMPLE_FPS` (capped at `MAX_SAMPLED_FRAMES`).
+2. **Four perception stages that fail independently** (`app/services/analysis.py`):
 
-    style D fill:#171a21,stroke:#57c98a,color:#e2e5f0
+   | Stage | Contract | Stored as |
+   |---|---|---|
+   | transcription | `SpeechProvider.transcribe(audio)` | `transcripts`, with timed segments |
+   | OCR | `OCRProvider.extract(frames)` | `ocr_results`, per frame with timestamp |
+   | vision | `VisionProvider.analyze_video(frames, transcript, ocr)` | `visual_analyses` |
+   | extraction | `ExtractionProvider.extract(vision, transcript, ocr)` | `extracted_content` |
+
+   A failure in one stage keeps the others: a broken OCR install does not discard a good transcript.
+   A vision failure falls back to the evidence-only provider. If any stage failed outright, the run
+   is `degraded` and goes to review regardless of confidence.
+3. **Vision sees the whole clip.** Frames are selected evenly across the video, not from its first
+   seconds, and are sent together, because what happens in a video is a sequence, not a still.
+
+### The key-points record and its evidence
+
+Extraction produces one domain-neutral record per video: `topic`, `key_points`, `entities`. Every
+field carries an **evidence tag**: `visual`, `ocr`, `transcript`, `metadata`, or `inferred`.
+
+Tags are **re-derived, not trusted**. Small vision models tag everything `visual`, including text
+they read off the screen. `VisionFieldExtractionProvider` therefore matches each value against the
+stored OCR and transcript text (lowercase alphanumerics only, because OCR drops spaces in stylised
+captions) and attributes it to where it can actually be found. Values shorter than four characters
+never claim corroboration, since they appear in almost any text by chance. A value nothing
+corroborates keeps the model's `visual` or `metadata` claim, or becomes `inferred`.
+
+Without a model, `RuleBasedExtractionProvider` uses the evidence's own words: distinct on-screen
+text lines, then the opening transcript sentences. It never infers a topic or entities.
+
+### Confidence routing
+
+`app/services/verification.py` decides whether a person needs to look:
+
+```text
+confidence ≥ AUTO_ACCEPT_CONFIDENCE (0.85)         → accepted
+AUTO_REVIEW_CONFIDENCE (0.60) ≤ confidence < 0.85  → secondary verification:
+                                                      every scalar value corroborated by OCR or
+                                                      transcript → verified, otherwise → review
+confidence < 0.60, no confidence, or no record     → review
 ```
 
-Comparisons use only the cases **both runs scored**. Comparing a run covering 50 cases against one
-covering 5 would otherwise report a difference in *coverage* as a difference in *quality* — the most
-likely way a benchmark quietly lies.
-
-With exactly two runs the comparison returns an ablation delta, which is what answers "how much does
-OCR actually contribute to structured extraction?" with a number instead of an assumption.
+The decision and its reason are written to the job's event history. Reviewers accept or reject
+through `POST /api/sources/{id}/review`; corrections are stored separately from model output.
 
 ---
 
-## 1.13 Security and operations
+## 4. Chunking
 
-- **Authentication** — `AUTH_REQUIRED` off (default) accepts a bearer token *or* the `X-User-Id`
-  development header. On, `X-User-Id` is ignored entirely, because a header any client can set is not
-  authentication. Passwords are PBKDF2-HMAC-SHA256 with a per-user salt; tokens are HMAC-signed with
-  an explicit expiry. Login answers identically for a wrong password and an unknown account.
-- **Authorization** — every collection, Reel, job, search, report, and workout is scoped to the
-  resolved identity. Another identity receives `404`, not `403`.
-- **Rate limiting** — `RATE_LIMIT_PER_MINUTE`, disabled by default, and **per process**: with N
-  workers the effective limit is N times the configured one.
-- **Logging** — one JSON object per line, with the request id carried in a context variable so a line
-  written deep in a service still identifies the request that caused it.
-- **Metrics** — `GET /api/system/metrics/pipeline` returns per-stage run counts, failure rates,
-  average and p95 latency, and models used.
-- **Capabilities** — `GET /api/capabilities` derives its limitations list from actual configuration,
-  so a client is never told a capability is available when it is not.
+`app/services/chunking.py` builds retrieval chunks from a source's **passages**. For processed
+kinds, passages are the segments. For video, they are the timed transcript lines, the on-screen text
+(a caption visible across many frames collapses into one span with a start and end), and the visual
+description.
 
----
-
-## 1.14 API surface
-
-64 operations. By area:
-
-| Area | Key endpoints |
-|---|---|
-| Ingestion | `POST /api/reels`, `POST /api/reels/upload`, `POST /api/reels/{id}/reprocess` |
-| Jobs | `GET /api/jobs`, `/{id}/events`, `/{id}/dispatch`, `/{id}/retry`, `/{id}/cancel` |
-| Knowledge | `GET /api/reels/{id}/analysis`, `POST /api/collections/{id}/index` |
-| Retrieval | `POST /api/search`, `POST /api/collections/{id}/ask`, `/duplicates` |
-| Reports | `GET /api/reports/collections/{id}` and `/narrative` |
-| Workout | `POST /api/workouts/generate` |
-| Media | `GET /api/reels/{id}/media`, `/media/{object_id}`, `POST /{id}/publish` |
-| Review | `GET /api/reels/review/queue`, `POST /api/reels/{id}/review` |
-| Evaluation | `/api/evaluations/cases`, `/api/evaluations/runs`, `/runs/compare` |
-| System | `/health`, `/ready`, `/api/system/metrics`, `/metrics/pipeline`, `/api/capabilities` |
-| Auth | `POST /api/auth/register`, `/login`, `GET /api/auth/me` |
-
-Interactive documentation at `/docs`.
-
----
-
-## 1.15 What is real, and what is not
-
-Stated plainly, because the difference matters:
-
-**Real and verified** — the full pipeline, graceful degradation, confidence routing, evidence
-provenance, all three retrieval modes, grounded answering with citation filtering, object storage,
-authentication, observability, benchmarking. 125 tests, deterministic across runs.
-
-**Implemented but unvalidated against live models** — every Claude provider is tested through a fake
-client. That pins the request shape and the grounding rules, but **not the prompts' actual quality**.
-Nothing here has been measured against live model output; tuning needs a real API key and real Reels.
-
-**Configured locally on this machine** - `.env` now runs real models: PP-OCRv4 for OCR,
-distil-large-v3 on CUDA for speech, Qwen2.5-VL-3B in 4-bit for vision, BGE-M3 embeddings, and
-bge-reranker-v2-m3. The *defaults* in code remain the dependency-free local paths, so a fresh clone
-still runs with no weights and no API key.
-
-**Structured output is enforced, not hoped for.** The local vision model decodes under a JSON-schema
-constraint (`lm-format-enforcer`), so it can only emit tokens that keep the output a valid instance
-of the schema. Free-text fields carry `maxLength` bounds - without them the model ran out of token
-budget mid-sentence and produced valid-but-unfinishable JSON, which a prefix constraint alone cannot
-prevent.
-
-**A caveat that matters more than it looks.** Qwen2.5-VL-3B reports high confidence readily - 0.95
-to 1.0 even on thin evidence. Confidence drives the three-tier routing, so a model that always claims
-certainty makes the review queue inert. Benchmark before trusting it -
-`/api/evaluations/runs/compare` exists for exactly this.
-
-**Switching embedding provider requires a reindex.** Vector width changes (256 -> 1024) and old rows
-become incompatible; the store logs how many it skipped and names the endpoint.
-
-**Not implemented** — pose estimation (optional in the architecture), distributed rate limiting,
-database migrations (no Alembic), and metrics export to Prometheus/OpenTelemetry.
-
----
-
-## 1.16 Where the models live, and when they load
-
-Models load **in order, on first use** — not all at startup, and never swapped back out. Every loader
-is `lru_cache`d, so once a model is in memory it stays there for the life of the process. The peak
-cost is therefore the **sum** of everything ever touched, not the largest single model.
-
-```
-JOB A  media_preparation   ffmpeg / ffprobe only        no models at all
-                             |
-JOB B  multimodal_analysis   |
-   1. transcribe   Whisper distil-large-v3   CPU/RAM   eager, at job start
-   2. ocr          RapidOCR PP-OCRv4         CPU/RAM   eager, at job start
-   3. vision       Qwen2.5-VL-3B 4-bit       VRAM      lazy, inside the stage
-   4. extraction   (no model)
-   5. index        BGE-M3                    VRAM      at the indexing step
-   6. verify       (no model)
-
-AT SEARCH TIME (not during processing)
-      rerank        bge-reranker-v2-m3        VRAM      first hybrid search only
+```text
+passages ─▶ group: same stream and same section ─▶ pack up to CHUNK_MAX_CHARACTERS
+                                                    each chunk starts with the last
+                                                    CHUNK_OVERLAP_CHARACTERS of the previous
 ```
 
-Whisper and OCR load **eagerly** — their providers are built as call arguments and load weights in
-`__init__`, so they are resident before the first stage runs. Qwen is **lazy**: its `__init__` only
-reads settings, and `_load()` runs inside the vision stage.
+- Packing **never mixes streams** (a transcript chunk never contains OCR text) and **never crosses a
+  heading**, but it does cross pages and time windows. The merged locator spans them.
+- A single passage longer than the limit becomes overlapping windows that end at word boundaries.
+- Extracted records stay one chunk each, keyed `extracted:<type>`.
+- A **summary chunk** (title, author, description, then the content, capped) is stored for
+  near-duplicate detection. It is **excluded from retrieval**, because it restates the other chunks
+  and would spend evidence slots on repetition.
 
-Both cheap stages run on the **CPU** by configuration (`WHISPER_DEVICE=cpu`). That is the fix from
-the cuDNN crash — onnxruntime and CTranslate2 ship their own CUDA libraries and fight PyTorch for the
-DLL search — and it has the useful side effect that they never compete with the VLM for VRAM.
-
-**The GPU budget on an 8 GB card:**
-
-| Model | Precision | VRAM |
-|---|---|---|
-| Qwen2.5-VL-3B | 4-bit | ~3.5 GB |
-| BGE-M3 | fp16 | 1.1 GB |
-| bge-reranker-v2-m3 | fp16 | 1.1 GB |
-| **All three resident** | | **~5.7 GB** |
-
-The two retrieval models ship as fp32 and would take 2.2 GB each, putting the resident total at
-~7.9 GB on an 8.1 GB card — with the desktop compositor also drawing on it. `RETRIEVAL_FP16`
-(default on) halves them. Set it to `false` to load at full width; it is ignored without CUDA,
-where fp16 would be slower rather than smaller.
-
-The counter-intuitive consequence: **the first hybrid search after a processing run is the likeliest
-moment to run out of VRAM**, not the vision stage. That is when the third model joins the two already
-resident.
+Each chunk is stored in `content_embeddings` with its text, vector, `locator`, and `position`. The
+Qdrant payload carries the locator too. Indexing a source replaces all of its chunks.
 
 ---
 
-# Part 2 — Using the app
+## 5. Retrieval
 
-Open **`http://127.0.0.1:8000/app`** (or port 8055 if you are running the demo config).
+All three modes rank the **same stored chunks**, which is what lets them be fused chunk by chunk.
 
-## 2.1 Navigation map
+- **Scope.** A collection is searched through its member source ids. `source_ids` narrows that to a
+  subset; ids outside the collection are a `404` that names them. Author and topic filters narrow
+  the eligible sources before anything is ranked.
+- **Lexical** is BM25 (k1 = 1.2, b = 0.75) over the chunks in scope, computed on the fly. It is the
+  right tool for exact names and terms, which dense vectors blur.
+- **Semantic** asks the vector store for the nearest chunks among the eligible sources.
+- **Hybrid** fuses the two rankings with reciprocal rank fusion (k = 60). Ranks are fused, not
+  scores, because BM25 scores and cosine similarities are on unrelated scales.
+- **Reranking** runs over a wider candidate window (`RERANK_CANDIDATES`) than the page asked for,
+  because its value is promoting what earlier stages ranked just below the cut.
 
-```mermaid
-flowchart TD
-    D["Dashboard<br/>counts, collections, recent processing"]
-    C["Collections<br/>create, add Reels"]
-    S["Search<br/>3 modes + filters"]
-    A["Ask<br/>grounded answers + report"]
-    W["Workout<br/>plan from your Reels"]
-    RQ["Review Queue<br/>accept / reject"]
-    P["Pipeline<br/>stage latency + failures"]
-    AC["Account<br/>sign in, capabilities"]
+Search results group chunks by source and keep up to three passages, each with its locator and a
+label from `describe_locator`. Answer evidence stays at chunk level: hybrid, reranked, and cut to
+`RAG_EVIDENCE_LIMIT` passages.
 
-    D --> AD["🔍 Reel audit drawer"]
-    S --> AD
-    W --> AD
-    RQ --> AD
+---
 
-    style AD fill:#171a21,stroke:#6ea8fe,color:#e2e5f0
+## 6. Answering
+
+### One-shot: `/ask`
+
+`answer_collection_question` retrieves evidence and hands it to the `AnswerProvider`. Claude and
+Ollama answer under the same JSON schema (`answer`, `grounded`, `cited_source_ids`); cited ids are
+intersected with the ids actually retrieved, so a hallucinated source cannot reach the caller.
+
+### Conversations
+
+A turn (`app/services/chat.py`) runs in order and every step is an event a streaming client sees:
+
+1. **Store the question.** The first question titles a new conversation.
+2. **Rewrite the follow-up.** With history, the provider turns "and why summing?" into a standalone
+   query. Old citation markers are stripped from the history first, since `[1]` meant a different
+   passage in an earlier turn. A failed rewrite falls back to the question as asked.
+3. **Retrieve** over the conversation's scope. Sources removed from the collection since the scope
+   was set drop out of it silently.
+4. **Stream the answer.** Passages are numbered `[1]…[n]` in the prompt; the model cites them inline.
+5. **Resolve citations.** Each marker becomes a citation (source, chunk, locator, label, snippet) in
+   order of first use. Markers outside the passage list are removed from the text: leaving them would
+   show a reader a citation that leads nowhere.
+6. **Store the outcome.** `complete`, `failed`, `refused`, or `interrupted`. A client that
+   disconnects closes the generator; the partial answer is stored as interrupted.
+
+One answer at a time per conversation: a second question while one is streaming is a `409`. A
+message still `streaming` after ten minutes belongs to a dead worker and stops blocking.
+
+The streaming endpoint opens its own database session, because the request's session may be closed
+before the response body finishes streaming.
+
+### The chat providers
+
+All three receive the same prompts (`app/providers/chat_prompts.py`): answer only from the passages,
+cite every claim with its passage number, say plainly when the collection does not cover the
+question, and treat earlier turns as context rather than evidence.
+
+- **`extractive`** quotes the most relevant sentence of each passage with its marker. Follow-ups
+  are handled by prefixing a short question with the previous one.
+- **`claude`** streams `claude-opus-5-5` through `client.beta.messages.stream` with effort set
+  explicitly and `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`): a question a
+  safety classifier declines is re-run on Anthropic's recommended fallback model inside the same
+  stream. The final `stop_reason` is checked before the text is trusted; a refusal discards the
+  partial answer and a `max_tokens` stop is reported as cut off. Rewrites run at `low` effort.
+- **`ollama`** streams NDJSON from a local Ollama server with `num_ctx` set on every request,
+  because Ollama's 2048-token default would silently truncate the passages. Its errors name the fix:
+  `ollama pull <model>`, `ollama serve`, `OLLAMA_NUM_CTX`.
+
+---
+
+## 7. Data model
+
+```text
+users
+collections ─┬─ collection_sources ─┬─ sources ─┬─ processing_jobs ── job_events, task_dispatches
+             │   (membership)        │  (library) ├─ source_segments        (processed kinds)
+             │                       │            ├─ media_assets           (video audio and frames)
+             │                       │            ├─ transcripts, ocr_results, visual_analyses
+             │                       │            ├─ extracted_content ── extraction_corrections
+             │                       │            ├─ content_embeddings     (chunks + vectors)
+             │                       │            ├─ stored_objects         (durable copies)
+             │                       │            ├─ processing_provenance, stage_metrics
+             └─ conversations ── chat_messages
+saved_searches, evaluation_cases, benchmark_runs ── benchmark_predictions
 ```
 
-The **audit drawer** is the centrepiece. It opens from anywhere a Reel appears — a processing row, a
-search result, a workout exercise, a review item — so provenance is always one click from wherever
-the Reel surfaced, never a separate destination you have to navigate to.
+- A `Source` belongs to a user and has a `kind`: `document`, `web`, `youtube`, `image`, `audio`,
+  `video`, or `text`. `details` holds kind-specific facts (page count, transcript language, fetched
+  URL) that do not deserve a column.
+- `processing_provenance` records the models that produced a source's knowledge, read back from what
+  the stages stored rather than from the configuration, so it reflects the run that happened.
+- The schema is versioned with Alembic. A database built by `create_all` before migrations existed
+  is **adopted**: the gaps between a phase 1–4 schema and the baseline are known exactly, so they are
+  filled from frozen copies of the baseline definitions (never the live models) and the database is
+  stamped at revision `0001`.
 
 ---
 
-## 2.2 Reading the colours
+## 8. Storage
 
-The palette carries meaning; learning it makes every screen readable at a glance.
+Working files and durable copies are kept apart on purpose. FFmpeg, OCR, and PDFium need real local
+files, so `MEDIA_ROOT` holds the working copies; the object store holds what is kept and served:
 
-| Colour | Means | Never means |
-|---|---|---|
-| **Green** | Completed, accepted, grounded | — |
-| **Blue** | Active, processing, primary action | — |
-| **Amber** | *A human should look* — needs review, degraded stage, ungrounded answer | "Something broke" |
-| **Red** | Hard failure only | — |
-| **Grey / dashed** | Skipped, or an `inferred` value | — |
-
-Amber appears often and is **not** an error. It is the system saying it is not confident enough to
-decide alone.
-
----
-
-## 2.3 Dashboard
-
-Four tiles — Total Reels, Analysed, Needs Review (amber when non-zero), Collections — then your
-collections with Reel counts, then the recent processing table.
-
-Each processing row shows the stage, a status pill, the attempt count, and an **Audit** button.
-Watching `stage` move from `ingestion` → `media_preparation` → `ocr_and_transcription` →
-`multimodal_analysis` → `completed` is how you follow a Reel through the pipeline.
-
----
-
-## 2.4 Collections
-
-Create a collection, then add Reels one of two ways:
-
-- **Add a Reel by URL** records a reference only. Nothing is fetched from Instagram, so a URL-only
-  Reel has no media and **cannot be analysed** — it will sit at `ingestion` forever.
-- **Upload a video** is the route into the actual pipeline. Pick the `.mp4`/`.mov`/`.webm` you
-  downloaded yourself (up to 100 MB); the optional URL field just records where it came from. On
-  upload the Reel is queued automatically, and a **Process** button appears on the dashboard for
-  anything still sitting at `ingestion`.
-
-Where the work runs is set by `TASK_RUNNER`:
-
-- **`local`** runs the pipeline on a background thread inside the API. No Redis, no Celery worker —
-  upload a video and it is analysed automatically, one Reel at a time. Work in flight is lost if the
-  process stops, but the job row survives and unfinished jobs are re-queued at startup.
-- **`celery`** hands the job to a Redis-backed worker (`docker compose up redis worker`). Durable and
-  scalable. If the broker is unreachable the upload still succeeds and the media is stored — the
-  interface says so in a couple of seconds rather than hanging.
-
-**View Reels** on any collection expands it in place, listing every Reel with its status, creator,
-caption and any error. From there you can open the evidence drawer, retry a pending Reel, or delete
-it. **Delete collection** removes the collection outright.
-
-Both deletions are permanent and cascade: deleting a Reel also removes its transcript, OCR, visual
-analysis, extracted knowledge, embeddings and downloaded media; deleting a collection does that for
-every Reel inside it. The confirmation says so before anything is removed.
-
-A collection scopes search, reports, and workout generation — keeping "AI" and "Workout" separate is what makes the topic filters and the workout
-planner useful.
-
-> The URL is recorded as a reference. Media is never fetched from Instagram; upload it yourself if
-> you want the pipeline to analyse it.
-
----
-
-## 2.5 Search
-
-```mermaid
-flowchart LR
-    A["Pick collection"] --> B["Type a query"]
-    B --> C["Choose mode:<br/>Lexical · Semantic · Hybrid"]
-    C --> D["Optionally filter by<br/>creator · topic · content type"]
-    D --> E["Results with chips + snippets"]
-    E --> F["Evidence → audit drawer"]
+```text
+users/{user_id}/sources/{source_id}/original.pdf       the uploaded or fetched file
+users/{user_id}/sources/{source_id}/video.mp4          a video source
+users/{user_id}/sources/{source_id}/audio.wav          extracted audio
+users/{user_id}/sources/{source_id}/frames/frame_00001.jpg
 ```
 
-Each result shows a **match-type chip** (`lexical`, `semantic`, or `hybrid`) so you always know which
-retriever produced it, plus creator and topic chips, the score, and the matching evidence snippets —
-each with a blue accent bar marking it as quoted evidence rather than generated text.
-
-**Rebuild index** re-embeds the collection. Run it after adding Reels, or after changing the
-embedding provider — semantic and hybrid modes return nothing without an index.
-
-*Try:* search `hybrid search reranking`, then switch modes and watch the ranking change. Filter by
-creator `@vector_dan` or topic `fine-tuning`.
+The keys are identical on the local and S3 backends. Media is served with `nosniff`, and a fetched
+HTML page only as a sandboxed attachment, since it is someone else's markup on this origin.
 
 ---
 
-## 2.6 Ask
+## 9. Where the models live, and when they load
 
-Ask a question about a collection. The answer panel shows a **Grounded** or **Not grounded** badge,
-the answering model, the answer, and the sources it cited — each with its snippet and a link to the
-Reel.
+Models load **on first use** and stay loaded for the life of the process (every loader is cached).
+The peak cost is the **sum** of everything a process has touched, not the largest single model.
 
-Ask about something the collection does not cover and it will say so explicitly rather than
-improvising. That refusal is the feature, not a limitation.
-
-Below, **Load report** aggregates the collection: topic, technology, and creator counts, plus average
-extraction confidence. With no narration provider configured it returns the aggregates marked
-un-narrated rather than padding them with invented prose.
-
----
-
-## 2.7 Workout
-
-Pick the collection holding exercise Reels, set days and exercises per day, optionally filter by
-equipment and target muscles, then Generate.
-
-Every exercise card shows sets × reps, equipment and muscle chips, the technique note, and — always —
-**which Reel it came from**, with Evidence and Open Reel buttons. The banner states the rule: *every
-exercise comes from a Reel you saved; nothing is invented.*
-
-> **Known behaviour:** with *Allow repeats* off, the planner reuses the same top slice of exercises on
-> every day, so a 2-day plan can be the same day twice while an eligible exercise goes unused. Cards
-> are labelled "Repeated from an earlier day". This is the planner's existing logic, not a UI fault.
-
----
-
-## 2.8 Review Queue
-
-Reels whose extraction landed below the confidence thresholds, or whose run had a failed stage.
-
-Each shows the creator, processing version, any error, and three actions: **Evidence** (audit
-drawer), **Accept**, **Reject**. Open the evidence first — the drawer is what tells you whether the
-extraction is trustworthy — then decide. Both decisions are recorded in the job event history.
-
----
-
-## 2.9 Pipeline
-
-Three tiles — Analysed Reels, Degraded Runs, Stage Runs — then the stage table: runs, succeeded,
-degraded, skipped, failed, failure rate, average and p95 latency, and models used. Any non-zero
-failure rate is tinted amber.
-
-> Skipped stages never ran, so they are excluded from the failure-rate denominator. A silent Reel
-> skipping transcription must not look like transcription failing.
-
-Below, the **stage sequence** strip shows the four stages with arrows continuing *through* a failed
-node — the visual statement that a failing stage does not stop the ones after it.
-
----
-
-## 2.10 The audit drawer — where provenance lives
-
-Click **Audit** or **Evidence** anywhere. You get:
-
-```mermaid
-flowchart TD
-    H["Reel header<br/>creator · caption · status · silent-or-speech"]
-    E["Extracted knowledge table<br/>FIELD · VALUE · EVIDENCE tag"]
-    C["Confidence block<br/>value + tier + the rule applied"]
-    T["Evidence timeline<br/>OCR and transcript against the same timestamps"]
-    V["Visual analysis<br/>model + description"]
-    P["Processing provenance<br/>the exact model set that produced this"]
-
-    H --> E --> C --> T --> V --> P
+```text
+documents, pages, text      no model (PDFium, python-docx, the splitter)
+scanned PDF pages, images   OCR provider                         CPU
+audio, video speech         Whisper (SPEECH_PROVIDER)            CPU by default
+video frames                Qwen2.5-VL (VISION_PROVIDER=qwen)    GPU, loaded inside the vision stage
+indexing                    embedding model (BGE-M3)             GPU
+hybrid search               reranker (bge-reranker)              GPU, first search only
+chat with CHAT_PROVIDER=…   claude: remote, no local cost
+                            ollama: a separate process with its own VRAM
 ```
 
-**How to read it.** Take the split-squat example:
-
-| Field | Value | Evidence |
-|---|---|---|
-| exercise | Bulgarian Split Squat | `VISUAL` |
-| sets | 3 | `OCR` |
-| reps | 10 each leg | `OCR` |
-| equipment | dumbbells, bench | `VISUAL` |
-| target_muscles | quadriceps, glutes | `INFERRED` *(dashed, dimmed)* |
-
-That table says: the movement was **seen**, the numbers were **read off the screen**, and the muscle
-groups were **concluded** — so if you are going to check one row, check the dashed one.
-
-Beside it, `0.90 · ACCEPTED · Above the 0.85 auto-accept threshold` tells you not just the score but
-the decision the pipeline actually made. The tier shown always mirrors the worker's routing, so the
-UI never implies a different decision than the one taken.
-
-At the bottom, the provenance block names every model involved — so if extraction quality changes
-next month, you can tell what changed.
+On an 8 GB card, Qwen2.5-VL-3B in 4-bit (about 3.5 GB) plus the two retrieval models in fp16
+(about 1.1 GB each, `RETRIEVAL_FP16`) fit together. A local chat model through Ollama competes for
+the same card, so pair it with a small model or run analysis and chat at different times. The local
+task runner processes one job at a time for the same reason.
 
 ---
 
-## 2.11 Account
+## 10. What is real, and what is not
 
-Register or sign in for a real identity; the development `X-User-Id` box greys out and is ignored
-once you do. Collections are per-identity — signing in shows an empty workspace, which is the
-ownership boundary working.
+Verified by the test suite, with no network, model weights, or API key:
 
-**Load** under Configured capabilities reports what is actually switched on, plus a candid list of
-known limitations for the current configuration.
+- ingestion and content-type checks, link normalisation and the network policy, fetching through
+  mock transports;
+- every processor on generated PDFs and Word files, chunking, BM25 and fused retrieval, located
+  citations, source scoping;
+- the chat turn end to end, including failures, refusals, and disconnects; the Claude and Ollama
+  providers against fake clients (request shape, fallback and effort settings, stop reasons, NDJSON);
+- video analysis with fake providers, evidence attribution, and confidence routing;
+- migrations: no drift from the models, reversibility, and adoption of older databases.
 
----
+Not verified here:
 
-## 2.12 A five-minute walkthrough
-
-1. **Collections** → create `AI` → add a Reel URL.
-2. **Dashboard** → watch it appear in recent processing.
-3. **Search** → pick `AI`, click **Rebuild index**, search something from the Reel, try all three modes.
-4. Click **Evidence** on a result → read the evidence tags and confidence tier in the drawer.
-5. **Ask** → ask a question the collection covers, then one it does not, and compare the two answers.
-6. **Pipeline** → see the stage timings that run produced.
-7. **Review Queue** → if anything landed there, open its evidence and accept or reject it.
-
----
-
-## Further reading
-
-- `README.md` — setup, configuration reference, and endpoint summaries.
-- `IMPLEMENTATION_STATUS.md` — what was built, in order, with the reasoning behind each decision.
-- `instagram_multimodal_knowledge_engine_architecture.md` — the original architecture specification.
-- `/docs` — interactive OpenAPI documentation on the running app.
+- the quality of real answers from Claude or Ollama, which needs an API key or a running model;
+- Whisper on real audio, PaddleOCR on real scans, and Claude image descriptions;
+- the migrations on PostgreSQL;
+- YouTube's caption endpoint, which the unofficial library depends on.
