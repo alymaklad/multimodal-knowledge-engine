@@ -1128,3 +1128,36 @@ rebinding DNS server could still steer a fetch inward; pinning the connection to
 address would close that. `youtube-transcript-api` is unofficial and can break when YouTube changes,
 and YouTube may refuse requests from cloud IP ranges. Neither fetcher has been run against the live
 network in this phase; the tests use mock transports and fake transcript APIs.
+
+## Completed — phase 3: a processor for every source kind (2026-10-25)
+
+Every non-video source is now turned into searchable, citable evidence. Processors live in
+`app/processors/` and produce `SourceSegment` rows: a passage of text, its modality (`text`,
+`transcript`, `ocr`, `visual`), and a locator saying where in the source it came from.
+
+| Kind | Processor | Locator |
+|---|---|---|
+| PDF | PDFium text per page (`pypdfium2`, chosen over PyMuPDF for its licence); pages with almost no text layer are rendered and sent to the configured OCR provider | `page` |
+| DOCX | `python-docx`, body in document order, heading styles kept as Markdown headings, tables as rows | `section`, `paragraph` |
+| TXT, Markdown, pasted text | Heading-aware splitter; code fences are not mistaken for headings | `section`, `paragraph` |
+| Web page | `trafilatura` when installed, otherwise a built-in extractor that drops scripts, navigation, headers, footers, asides, and forms; fetched PDFs and text reuse the document processors | `section`, `paragraph` |
+| YouTube | Stored captions grouped into windows of `TRANSCRIPT_WINDOW_SECONDS` | `start`, `end` |
+| Audio | FFmpeg to 16 kHz mono, then the configured speech provider, windowed the same way | `start`, `end` |
+| Image | OCR text, plus a prose description from Claude when `VISION_PROVIDER=claude` (new `ImageDescriber` contract; large images are downscaled first) | `region` |
+
+Segments never cross a heading and stay under `SEGMENT_MAX_CHARACTERS`; an overlong section is
+split between paragraphs, then sentences. Problems that do not stop processing (one unreadable page,
+OCR failing on an image that still has a description) are recorded as warnings: the stage metric is
+`degraded` and each warning is a job event. A source with nothing extractable fails with the reason.
+
+Pipeline: after fetching or upload, a source waits at `awaiting_processor`, then
+`process_source_content` (Celery task `sources.extract_content`) runs the processor, replaces the
+segments, records a stage metric and provenance (`processor_models`), indexes, and completes the
+source. Providers are built lazily, so a Markdown file never loads an OCR or speech model. Until
+phase 4's chunker, each segment is embedded as one chunk and lexical search reads segments directly.
+
+Verified: 252 tests, including real PDFs (generated in the test), real DOCX files, and an end-to-end
+upload that is segmented, indexed, found by hybrid search, and cited by `/ask`. A live fetch of
+example.com through the web processor produced clean body text. Not verified against live models:
+OCR of scanned pages (tests use a fake OCR provider), Whisper on real audio, and Claude image
+descriptions.

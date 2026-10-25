@@ -9,6 +9,7 @@ value, and both tag every field with the evidence type it came from (section 22)
 from __future__ import annotations
 
 import base64
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from app.core.config import get_settings
 from app.providers.base import (
     ExtractionProvider,
     ExtractionResult,
+    ImageDescriber,
+    ImageDescription,
     VisionProvider,
     VisionResult,
 )
@@ -242,3 +245,73 @@ class ClaudeExtractionProvider(ExtractionProvider):
             "`evidence` object mapping each field you filled to the evidence type that supports it.\n\n"
             + NO_INVENTION_RULE
         )
+
+
+IMAGE_LONG_EDGE = 1568
+IMAGE_MAX_BYTES = 3_750_000
+
+
+class ClaudeImageDescriber(ImageDescriber):
+    """Describes a standalone image, such as a chart, diagram, slide, or photo of notes.
+
+    Unlike the video provider this asks for prose, not a schema: the description is evidence to be
+    searched and quoted, and a fixed set of fields would lose most of what a diagram says.
+    """
+
+    def __init__(self, model: str | None = None, client: Any | None = None) -> None:
+        settings = get_settings()
+        self._model = model or settings.anthropic_model
+        self._client = client if client is not None else build_anthropic_client()
+
+    def describe(self, image_path: Path, ocr_text: str) -> ImageDescription:
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=2000,
+            system=(
+                "You describe images for a personal knowledge base, so that the image can be found by "
+                "search and quoted in answers. Describe only what is visible. Never guess at what is "
+                "not shown, and say so when something is unreadable."
+            ),
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        _scaled_image_block(image_path),
+                        {
+                            "type": "text",
+                            "text": (
+                                "TEXT DETECTED IN THE IMAGE (OCR, may contain errors):\n"
+                                + (ocr_text.strip() or "(none detected)")
+                                + "\n\nDescribe this image in plain prose. Say what kind of image it is. "
+                                "For a chart or table, state what it measures and the values it shows. "
+                                "For a diagram, explain its parts and how they connect. Transcribe any "
+                                "important visible text exactly."
+                            ),
+                        },
+                    ],
+                }
+            ],
+        )
+        text = "\n".join(block.text for block in response.content if block.type == "text").strip()
+        return ImageDescription(text=text, model=f"{self._model}-image")
+
+
+def _scaled_image_block(image_path: Path) -> dict[str, Any]:
+    """The image as a base64 block, downscaled when it is larger than the model can use."""
+    data = image_path.read_bytes()
+    media_type = _MEDIA_TYPES.get(image_path.suffix.lower(), "image/jpeg")
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None
+    if Image is not None:
+        with Image.open(image_path) as image:
+            if max(image.size) > IMAGE_LONG_EDGE or len(data) > IMAGE_MAX_BYTES:
+                image.thumbnail((IMAGE_LONG_EDGE, IMAGE_LONG_EDGE))
+                buffer = io.BytesIO()
+                image.convert("RGB").save(buffer, format="JPEG", quality=88)
+                data, media_type = buffer.getvalue(), "image/jpeg"
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": base64.standard_b64encode(data).decode("utf-8")},
+    }

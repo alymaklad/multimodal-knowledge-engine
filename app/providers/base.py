@@ -37,6 +37,12 @@ class ExtractionResult:
 
 
 @dataclass(frozen=True)
+class ImageDescription:
+    text: str
+    model: str = "unknown"
+
+
+@dataclass(frozen=True)
 class EvidenceChunk:
     source_id: int
     title: str
@@ -67,6 +73,13 @@ class OCRProvider(ABC):
 class VisionProvider(ABC):
     @abstractmethod
     def analyze_video(self, frame_paths: list[Path], transcript: str, ocr_text: str) -> VisionResult: ...
+
+
+class ImageDescriber(ABC):
+    """Describes a standalone image (a chart, a diagram, a photo of a whiteboard) as searchable text."""
+
+    @abstractmethod
+    def describe(self, image_path: Path, ocr_text: str) -> ImageDescription: ...
 
 
 class ExtractionProvider(ABC):

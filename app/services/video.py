@@ -129,6 +129,20 @@ class FFmpegVideoProcessor:
             raise VideoProcessingError("ffmpeg did not produce any sampled frames")
         return PreparedMedia(audio_path=str(audio_path) if audio_path else None, frame_paths=frames, metadata=metadata)
 
+    def extract_audio(self, media_path: str | Path, output_directory: str | Path) -> tuple[str, float | None]:
+        """Convert any audio file to the mono 16 kHz WAV speech models expect. Returns path and duration."""
+        source = Path(media_path)
+        if not source.is_file():
+            raise VideoProcessingError(f"Media file does not exist: {source}")
+        metadata = self.probe(source)
+        if not metadata.has_audio:
+            raise VideoProcessingError("The file contains no audio stream")
+        output_dir = Path(output_directory)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = output_dir / "audio.wav"
+        self._run([self.ffmpeg_binary, "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", str(audio_path)])
+        return str(audio_path), metadata.duration_seconds
+
     def _run(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(command, check=True, text=True, capture_output=True)

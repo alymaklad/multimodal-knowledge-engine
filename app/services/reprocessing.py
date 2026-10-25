@@ -5,6 +5,7 @@ from app.core.config import get_settings
 from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualAnalysis
 from app.models.embedding import ContentEmbedding
 from app.models.provenance import ProcessingProvenance
+from app.models.segment import SourceSegment
 from app.models.stored_object import StoredObject
 from app.models.job import JobStatus, ProcessingJob
 from app.models.media_asset import MediaAsset
@@ -22,6 +23,7 @@ def reset_source_for_reprocessing(db: Session, source: Source) -> ProcessingJob:
     db.execute(delete(ContentEmbedding).where(ContentEmbedding.source_id == source.id))
     db.execute(delete(ProcessingProvenance).where(ProcessingProvenance.source_id == source.id))
     db.execute(delete(StoredObject).where(StoredObject.source_id == source.id))
+    db.execute(delete(SourceSegment).where(SourceSegment.source_id == source.id))
 
     job = source.processing_job
     if job is None:

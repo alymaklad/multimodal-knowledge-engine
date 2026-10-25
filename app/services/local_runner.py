@@ -80,7 +80,14 @@ def _process(job_id: int) -> None:
     )
     from app.providers.local import EvidenceVisionProvider
     from app.providers.speech import get_speech_provider
-    from app.workers.pipeline import analyze_source, start_source_job
+    from app.processors.registry import default_context
+    from app.workers.pipeline import (
+        AWAITING_PROCESSOR,
+        CONTENT_EXTRACTION,
+        analyze_source,
+        process_source_content,
+        start_source_job,
+    )
 
     with SessionLocal() as db:
         job = db.get(ProcessingJob, job_id)
@@ -93,6 +100,12 @@ def _process(job_id: int) -> None:
             job = start_source_job(db, job_id)
             if job.status is JobStatus.failed:
                 return
+
+        # Every non-video source arrives here once its raw content is stored. A job interrupted
+        # inside extraction is run again; the stage replaces its own output.
+        if job.current_stage in (AWAITING_PROCESSOR, CONTENT_EXTRACTION):
+            process_source_content(db, job_id, context=default_context())
+            return
 
         # Same chaining the Celery task does: preparation leaves the job ready for analysis.
         # `multimodal_analysis` is accepted as well so a job resumed after a worker died *inside*
@@ -122,7 +135,14 @@ def resume_unfinished() -> int:
         # nothing that will ever collect it, so the source spins in the interface forever. Observed,
         # not hypothetical. Re-running the stage is safe: it is retry-safe by design and replaces
         # its own prior output.
-        stages = ("ingestion", "fetching", "ocr_and_transcription", "multimodal_analysis")
+        stages = (
+            "ingestion",
+            "fetching",
+            "awaiting_processor",
+            "content_extraction",
+            "ocr_and_transcription",
+            "multimodal_analysis",
+        )
         jobs = [
             job.id
             for job in db.query(ProcessingJob)

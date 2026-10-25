@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from sqlalchemy import delete
@@ -6,7 +7,10 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.job import JobStatus, ProcessingJob
 from app.models.media_asset import MediaAsset, MediaAssetKind
+from app.models.segment import SourceSegment
 from app.models.source import Source, SourceKind, SourceStatus
+from app.processors.base import ProcessingError, ProcessorContext
+from app.processors.registry import process_source
 from app.providers.base import ExtractionProvider, OCRProvider, SpeechProvider, VisionProvider
 from app.models.stage_metric import StageMetric, StageStatus
 from app.services.analysis import AnalysisOutcome, run_analysis
@@ -19,8 +23,9 @@ from app.services.publishing import publish_source_media
 from app.services.verification import verify_extractions
 from app.services.video import FFmpegVideoProcessor, VideoProcessingError
 
-# A job whose source has its raw content but no processor for its kind yet waits here.
+# A non-video source whose raw content is stored waits here for content extraction.
 AWAITING_PROCESSOR = "awaiting_processor"
+CONTENT_EXTRACTION = "content_extraction"
 
 
 def start_source_job(
@@ -34,7 +39,7 @@ def start_source_job(
     """The first worker stage for every source: route it by kind.
 
     Links are fetched, video goes through media preparation, and anything else already has its raw
-    content on disk and waits for the processor of its kind.
+    content on disk and is queued for content extraction.
     """
     job = db.get(ProcessingJob, job_id)
     if job is None:
@@ -101,6 +106,118 @@ def fetch_source_content(
     return _hold_for_processor(db, job, source)
 
 
+def process_source_content(
+    db: Session,
+    job_id: int,
+    *,
+    context: ProcessorContext,
+    media_processor: FFmpegVideoProcessor | None = None,
+) -> ProcessingJob:
+    """Turn a non-video source's stored file into segments, then index them.
+
+    Retry-safe: a run replaces the segments and vectors of the previous one. Problems that do not stop
+    processing, such as one unreadable page, are kept as job events and in the stage metric.
+    """
+    job = db.get(ProcessingJob, job_id)
+    if job is None:
+        raise LookupError(f"Processing job {job_id} does not exist")
+    source = db.get(Source, job.source_id)
+    if source is None:
+        return _fail_job(db, job, None, "The source associated with this job no longer exists")
+
+    job.status = JobStatus.running
+    job.current_stage = CONTENT_EXTRACTION
+    job.attempt_count += 1
+    source.status = SourceStatus.processing
+    record_job_event(db, job_id=job.id, stage=CONTENT_EXTRACTION, event_type="started")
+    db.commit()
+
+    started = time.perf_counter()
+    try:
+        result = process_source(source, context, media_processor=media_processor)
+    except Exception as error:
+        message = str(error) if isinstance(error, ProcessingError) else f"Processing failed ({type(error).__name__}: {error})"
+        _record_extraction_metric(db, source, job, started, StageStatus.failed, error_message=message)
+        return _fail_job(db, job, source, message)
+
+    try:
+        db.execute(delete(SourceSegment).where(SourceSegment.source_id == source.id))
+        for sequence, segment in enumerate(result.segments, start=1):
+            db.add(
+                SourceSegment(
+                    source_id=source.id,
+                    sequence=sequence,
+                    modality=segment.modality,
+                    text=segment.text,
+                    locator=segment.locator,
+                )
+            )
+        source.details = {**(source.details or {}), **result.details}
+        if result.duration is not None:
+            source.duration = result.duration
+        _record_extraction_metric(
+            db,
+            source,
+            job,
+            started,
+            StageStatus.degraded if result.warnings else StageStatus.succeeded,
+            models=result.models,
+            items=len(result.segments),
+            error_message="; ".join(result.warnings) or None,
+        )
+        db.flush()
+        db.refresh(source)
+        index_source(db, source)
+        record_provenance(
+            db, source_id=source.id, processing_version=source.processing_version, processor_models=result.models
+        )
+        for warning in result.warnings:
+            record_job_event(db, job_id=job.id, stage=CONTENT_EXTRACTION, event_type="degraded", message=warning)
+        source.status = SourceStatus.completed
+        source.error_message = None
+        job.status = JobStatus.completed
+        job.current_stage = "completed"
+        job.error_message = None
+        record_job_event(
+            db,
+            job_id=job.id,
+            stage="completed",
+            event_type="completed",
+            message=f"{len(result.segments)} segments extracted",
+        )
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        return _fail_job(db, job, source, f"Storing the processed content failed ({type(error).__name__}: {error})")
+    db.refresh(job)
+    return job
+
+
+def _record_extraction_metric(
+    db: Session,
+    source: Source,
+    job: ProcessingJob,
+    started: float,
+    status: StageStatus,
+    *,
+    models: list[str] | None = None,
+    items: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    db.add(
+        StageMetric(
+            source_id=source.id,
+            job_id=job.id,
+            stage=CONTENT_EXTRACTION,
+            status=status,
+            duration_ms=round((time.perf_counter() - started) * 1000, 3),
+            model=", ".join(models or [])[:128] or None,
+            items_processed=items,
+            error_message=error_message,
+        )
+    )
+
+
 def _hold_for_processor(db: Session, job: ProcessingJob, source: Source) -> ProcessingJob:
     publish_source_media(db, source)
     job.status = JobStatus.queued
@@ -113,7 +230,7 @@ def _hold_for_processor(db: Session, job: ProcessingJob, source: Source) -> Proc
         job_id=job.id,
         stage=AWAITING_PROCESSOR,
         event_type="waiting",
-        message=f"Raw content is stored; {source.kind.value} sources are not analysed yet",
+        message="Raw content is stored and queued for content extraction",
     )
     db.commit()
     db.refresh(job)

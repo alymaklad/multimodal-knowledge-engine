@@ -11,7 +11,9 @@ from app.models.embedding import ContentEmbedding
 from app.models.provenance import ProcessingProvenance
 
 
-def record_provenance(db: Session, *, source_id: int, processing_version: str) -> ProcessingProvenance:
+def record_provenance(
+    db: Session, *, source_id: int, processing_version: str, processor_models: list[str] | None = None
+) -> ProcessingProvenance:
     """Capture the model set actually used, read back from what the stage persisted.
 
     Reading the stored artifacts rather than the configuration means the record reflects the run
@@ -33,6 +35,9 @@ def record_provenance(db: Session, *, source_id: int, processing_version: str) -
         "extraction_provider": settings.extraction_provider,
         "extraction_prompt_version": settings.extraction_prompt_version,
     }
+    if processor_models is not None:
+        # Non-video sources: the processor that produced the segments, such as pdfium plus OCR.
+        models["processor_models"] = processor_models
 
     existing = db.scalar(select(ProcessingProvenance).where(ProcessingProvenance.source_id == source_id))
     if existing is None:

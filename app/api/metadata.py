@@ -19,7 +19,10 @@ def capabilities() -> dict[str, object]:
     tools = media_tools_status()
     if not youtube_transcripts_available():
         limitations.append("youtube-transcript-api is not installed; YouTube links cannot be fetched")
-    limitations.append("only video sources are analysed so far; other kinds are stored and wait for their processor")
+    if not speech_configured:
+        limitations.append("SPEECH_PROVIDER is none; audio sources cannot be transcribed")
+    if settings.vision_provider.lower() not in {"claude", "anthropic"}:
+        limitations.append("images are searchable by their OCR text only; set VISION_PROVIDER=claude to describe them")
     for tool, path in tools.items():
         if path is None:
             limitations.append(
@@ -49,6 +52,15 @@ def capabilities() -> dict[str, object]:
     return {
         "ingestion": ["web_url", "youtube_url", "pasted_text", "local_video_upload", "file_upload"],
         "upload_types": describe_accepted_types(),
+        "processors": {
+            "document": ["pdf_text", f"pdf_ocr_fallback_{settings.ocr_provider}", "docx", "text", "markdown"],
+            "web": ["html_main_content", "pdf", "text"],
+            "youtube": ["captions"],
+            "image": [f"{settings.ocr_provider}_ocr"]
+            + (["claude_description"] if settings.vision_provider.lower() in {"claude", "anthropic"} else []),
+            "audio": [settings.speech_provider] if speech_configured else [],
+            "segment_max_characters": settings.segment_max_characters,
+        },
         "link_fetching": {
             "private_hosts_allowed": settings.fetch_allow_private_hosts,
             "max_bytes": settings.max_fetch_bytes,

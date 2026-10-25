@@ -47,6 +47,7 @@ def _sources_with_evidence(db: Session, collection_id: int):
             selectinload(Source.ocr_results),
             selectinload(Source.visual_analysis),
             selectinload(Source.extracted_content),
+            selectinload(Source.segments),
         )
     )
 
@@ -118,6 +119,11 @@ def search_collection(
                 item.text_representation
                 for item in source.extracted_content
                 if content_type is None or item.content_type == content_type
+            ),
+            *(
+                segment.text
+                for segment in source.segments
+                if content_type is None or segment.modality == content_type
             ),
         ]
         combined = "\n".join(parts).lower()

@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     fetch_user_agent: str = "MultimodalKnowledgeEngine/0.1 (+personal knowledge base; fetches links its user added)"
     # Comma-separated, in order of preference. Any other language is used when none of these exists.
     youtube_transcript_languages: str = "en"
+    # Processors split sources into segments no longer than this, at natural boundaries.
+    segment_max_characters: int = 1800
+    # A PDF page with less extractable text than this is treated as scanned and sent to OCR.
+    pdf_ocr_min_characters: int = 20
+    pdf_ocr_dpi: int = 200
+    max_document_pages: int = 1000
+    # Transcripts (YouTube, audio) are grouped into windows of about this many seconds.
+    transcript_window_seconds: float = 60.0
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     frame_sample_fps: float = 1.0

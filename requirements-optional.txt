@@ -7,6 +7,9 @@ faster-whisper>=1.0,<2.0
 # EMBEDDING_PROVIDER=sentence_transformer
 sentence-transformers>=3.0,<6.0
 
+# Better main-content extraction from web pages (a built-in extractor is used without it)
+trafilatura>=2.0,<3.0
+
 # YouTube links: fetches the video's captions (unofficial; reads what the player shows)
 youtube-transcript-api>=1.0,<2.0
 

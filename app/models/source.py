@@ -96,3 +96,6 @@ class Source(Base):
     stage_metrics: Mapped[list["StageMetric"]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
     )
+    segments: Mapped[list["SourceSegment"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan", order_by="SourceSegment.sequence"
+    )

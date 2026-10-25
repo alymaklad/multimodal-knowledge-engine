@@ -24,7 +24,8 @@ def build_source_chunks(source: Source) -> list[SourceChunk]:
     """Turn a source's evidence into the textual representations that get embedded.
 
     Each modality is embedded separately so a match can be attributed to the evidence that
-    produced it, and a whole-source summary chunk carries the cross-modal context.
+    produced it, and a whole-source summary chunk carries the cross-modal context. Processed
+    segments (documents, pages, transcripts, images) are embedded one chunk per segment.
     """
     chunks: list[SourceChunk] = []
     if source.transcript and source.transcript.text.strip():
@@ -38,6 +39,9 @@ def build_source_chunks(source: Source) -> list[SourceChunk]:
         text = (item.text_representation or "").strip()
         if text:
             chunks.append(SourceChunk(f"extracted:{item.content_type}", item.content_type, text))
+    for segment in source.segments:
+        if segment.text.strip():
+            chunks.append(SourceChunk(f"segment:{segment.sequence}", segment.modality, segment.text.strip()))
 
     summary = "\n".join(
         part
@@ -103,6 +107,7 @@ def index_collection(db: Session, collection_id: int) -> dict[str, int]:
             selectinload(Source.ocr_results),
             selectinload(Source.visual_analysis),
             selectinload(Source.extracted_content),
+            selectinload(Source.segments),
         )
     )
     indexed_sources = 0

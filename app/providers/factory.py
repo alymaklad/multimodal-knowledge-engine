@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from app.core.config import get_settings
 from app.providers.answering import ExtractiveAnswerProvider
-from app.providers.base import AnswerProvider, ExtractionProvider, OCRProvider, VisionProvider
+from app.providers.base import AnswerProvider, ExtractionProvider, ImageDescriber, OCRProvider, VisionProvider
 from app.providers.local import (
     EvidenceVisionProvider,
     RuleBasedExtractionProvider,
@@ -48,6 +48,15 @@ def get_vision_provider() -> VisionProvider:
             strong_provider=ClaudeVisionProvider(model=settings.anthropic_model),
         )
     raise ValueError(f"Unsupported vision provider: {name}")
+
+
+def get_image_describer() -> ImageDescriber | None:
+    """Image descriptions follow VISION_PROVIDER. Only Claude describes standalone images so far."""
+    if get_settings().vision_provider.lower() in {"claude", "anthropic"}:
+        from app.providers.claude import ClaudeImageDescriber
+
+        return ClaudeImageDescriber()
+    return None
 
 
 def get_extraction_provider() -> ExtractionProvider:

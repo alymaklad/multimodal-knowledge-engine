@@ -8,6 +8,7 @@ from app.models.provenance import ProcessingProvenance
 from app.models.stored_object import StoredObject, StoredObjectKind
 from app.models.stage_metric import StageMetric, StageStatus
 from app.models.saved_search import SavedSearch
+from app.models.segment import SourceSegment
 from app.models.task_dispatch import TaskDispatch
 from app.models.job import JobStatus, ProcessingJob
 from app.models.job_event import JobEvent
@@ -26,6 +27,7 @@ __all__ = [
     "StageMetric",
     "StageStatus",
     "SavedSearch",
+    "SourceSegment",
     "TaskDispatch",
     "ExtractedContent",
     "BenchmarkPrediction",
