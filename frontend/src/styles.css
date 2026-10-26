@@ -1,0 +1,838 @@
+/* Tokens. One accent only: the highlighter, which means "this came from a source". */
+:root {
+  --paper: #f1f3f4;
+  --surface: #fafbfb;
+  --ink: #1c2431;
+  --graphite: #5c6675;
+  --rule: #d5dadf;
+  --highlight: #ffe14d;
+  --highlight-soft: #fff3a8;
+  --alarm: #b42318;
+  --focus: #1c2431;
+
+  --ui: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
+  --read: "Newsreader", Georgia, "Times New Roman", serif;
+
+  --size-sm: 0.8125rem; /* 13 */
+  --size-base: 0.9375rem; /* 15 */
+  --size-read: 1.0625rem; /* 17 */
+  --size-lg: 1.3125rem; /* 21 */
+  --size-xl: 1.75rem; /* 28 */
+
+  --pane-left: 18rem;
+  --pane-right: 22rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #15191f;
+    --surface: #1b2028;
+    --ink: #e4e8ec;
+    --graphite: #9aa4b1;
+    --rule: #2c333d;
+    --highlight: #e8cb3a;
+    --highlight-soft: #4a4220;
+    --alarm: #f97066;
+    --focus: #e4e8ec;
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: var(--size-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* Buttons: one strong style for the action that matters, a quiet one for everything else. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:hover {
+  border-color: var(--graphite);
+}
+
+.button-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.button-primary:hover {
+  border-color: var(--ink);
+  opacity: 0.9;
+}
+
+.button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--graphite);
+  padding: 0.25rem 0.4rem;
+}
+
+.button-quiet:hover {
+  color: var(--ink);
+  border-color: transparent;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.field {
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 0.55rem 0.7rem;
+}
+
+.field:focus-visible {
+  outline-offset: 0;
+}
+
+.muted {
+  color: var(--graphite);
+}
+
+.small {
+  font-size: var(--size-sm);
+}
+
+.error-text {
+  color: var(--alarm);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Shell */
+.shell {
+  display: grid;
+  /* minmax(0, 1fr): a menu sized to its longest option must not widen the whole page. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.6rem 1.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.wordmark {
+  font-family: var(--read);
+  font-size: var(--size-lg);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topnav {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.topnav a,
+.topnav select {
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  text-decoration: none;
+  color: var(--graphite);
+}
+
+.topnav a[aria-current="page"] {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.notebook-picker {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink) !important;
+  max-width: 16rem;
+}
+
+/* Workspace: sources | conversation | passage */
+.workspace {
+  display: grid;
+  grid-template-columns: var(--pane-left) minmax(0, 1fr) var(--pane-right);
+  min-height: 0;
+}
+
+.workspace.no-passage {
+  grid-template-columns: var(--pane-left) minmax(0, 1fr);
+}
+
+.pane {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pane + .pane {
+  border-left: 1px solid var(--rule);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem 0.5rem;
+}
+
+.pane-head h2 {
+  font-size: var(--size-base);
+}
+
+/* Sources */
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.5rem 1rem;
+}
+
+.source-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 6px;
+}
+
+.source-row:hover,
+.source-row.is-open {
+  background: var(--surface);
+}
+
+.source-row input[type="checkbox"] {
+  margin: 0.2rem 0 0;
+  accent-color: var(--ink);
+  width: 1rem;
+  height: 1rem;
+}
+
+.source-title {
+  display: block;
+  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.source-title:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.kind-icon {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  color: var(--graphite);
+  flex: none;
+}
+
+.status {
+  display: block;
+  font-size: var(--size-sm);
+  color: var(--graphite);
+}
+
+.status-failed {
+  color: var(--alarm);
+}
+
+.status-working::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: var(--graphite);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.scope-line {
+  padding: 0 1.25rem 0.5rem;
+  font-size: var(--size-sm);
+  color: var(--graphite);
+}
+
+.scope-line button {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  color: inherit;
+}
+
+/* Conversation */
+.chat {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+}
+
+.chat-head select {
+  min-width: 0;
+  max-width: min(22rem, 100%);
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  font-weight: 600;
+}
+
+.chat-head select:hover {
+  border-color: var(--rule);
+}
+
+.thread {
+  overflow-y: auto;
+  padding: 0.5rem 1.5rem 2rem;
+}
+
+.turn {
+  max-width: 68ch;
+  margin: 0 auto 2rem;
+}
+
+.question {
+  font-weight: 600;
+  font-size: var(--size-read);
+  margin: 0 0 0.6rem;
+  overflow-wrap: anywhere;
+}
+
+.answer {
+  font-family: var(--read);
+  font-size: var(--size-read);
+  line-height: 1.65;
+}
+
+.answer p {
+  margin: 0 0 0.85rem;
+}
+
+.answer ul {
+  margin: 0 0 0.85rem;
+  padding-left: 1.2rem;
+}
+
+.answer li {
+  margin-bottom: 0.35rem;
+}
+
+.answer-meta {
+  font-family: var(--ui);
+  font-size: var(--size-sm);
+  color: var(--graphite);
+  margin-top: 0.25rem;
+}
+
+.answer-problem {
+  font-family: var(--ui);
+  font-size: var(--size-base);
+  color: var(--alarm);
+}
+
+/* The signature: a citation is a highlighter swipe over its number. */
+.cite {
+  display: inline-block;
+  min-width: 1.35em;
+  margin: 0 0.12em;
+  padding: 0 0.3em;
+  border: 0;
+  border-radius: 0.2em 0.45em 0.25em 0.5em;
+  background: linear-gradient(100deg, transparent 2%, var(--highlight) 6%, var(--highlight) 94%, transparent 98%);
+  color: #1c2431;
+  font-family: var(--ui);
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: 0.18em;
+  cursor: pointer;
+}
+
+.cite:hover {
+  filter: brightness(0.95);
+}
+
+.cite[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+.cite:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: -0.12em;
+  background: var(--graphite);
+  animation: pulse 1s steps(2) infinite;
+}
+
+.composer {
+  padding: 0.75rem 1.5rem 1.25rem;
+}
+
+.composer form {
+  max-width: 68ch;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.composer textarea {
+  resize: none;
+  min-height: 2.75rem;
+  max-height: 12rem;
+  line-height: 1.45;
+}
+
+.composer-hint {
+  max-width: 68ch;
+  margin: 0.4rem auto 0;
+  font-size: var(--size-sm);
+  color: var(--graphite);
+}
+
+.empty {
+  max-width: 46ch;
+  margin: 3rem auto;
+}
+
+.empty h2 {
+  font-family: var(--read);
+  font-size: var(--size-xl);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.6rem;
+}
+
+.empty p {
+  margin: 0 0 1rem;
+  color: var(--graphite);
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Passage panel */
+.passage {
+  padding: 1rem 1.25rem 2rem;
+}
+
+.passage-source {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.passage-where {
+  color: var(--graphite);
+  font-size: var(--size-sm);
+  margin: 0.15rem 0 1rem;
+}
+
+/* The passage reads as plain text; a highlighter rule marks it as quoted, and only the sentence
+   that supports the claim gets the wash. */
+.passage-text {
+  font-family: var(--read);
+  font-size: var(--size-read);
+  line-height: 1.65;
+  margin: 0 0 1rem;
+  padding-left: 0.85rem;
+  border-left: 3px solid var(--highlight);
+}
+
+.passage-text mark {
+  background: var(--highlight-soft);
+  color: inherit;
+  padding: 0.05em 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 1.25rem;
+  font-size: var(--size-sm);
+}
+
+.detail-list dt {
+  color: var(--graphite);
+}
+
+.detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Library */
+.library {
+  overflow-y: auto;
+  padding: 1.5rem 1.5rem 3rem;
+}
+
+.library-inner {
+  max-width: 64rem;
+  margin: 0 auto;
+}
+
+.library-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.library-head h1 {
+  font-family: var(--read);
+  font-size: var(--size-xl);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--graphite);
+  font-size: var(--size-sm);
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.table td {
+  padding: 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.table td:first-child {
+  width: 1.75rem;
+}
+
+.collections-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 2.5rem;
+}
+
+.collection-link {
+  display: block;
+  min-width: 12rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.collection-link:hover {
+  border-color: var(--graphite);
+}
+
+.collection-link strong {
+  display: block;
+}
+
+.section-title {
+  font-size: var(--size-lg);
+  margin: 0 0 0.75rem;
+}
+
+/* Dialog */
+dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+dialog::backdrop {
+  background: rgb(28 36 49 / 0.35);
+}
+
+.dialog-body {
+  padding: 1.25rem 1.25rem 1rem;
+}
+
+.dialog-body h2 {
+  font-size: var(--size-lg);
+  margin-bottom: 1rem;
+}
+
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem 1.25rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  border: 0;
+  background: none;
+  padding: 0.4rem 0.75rem;
+  color: var(--graphite);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.dropzone {
+  display: grid;
+  place-items: center;
+  gap: 0.35rem;
+  padding: 1.75rem 1rem;
+  border: 1px dashed var(--graphite);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dropzone.dragging {
+  background: var(--highlight-soft);
+}
+
+.stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.notice {
+  margin-top: 0.75rem;
+  font-size: var(--size-sm);
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(36rem, calc(100vw - 2rem));
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  z-index: 10;
+}
+
+.toast button {
+  background: none;
+  border: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Narrow screens: one pane at a time, switched by the bar at the bottom. */
+.mobile-tabs {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .workspace,
+  .workspace.no-passage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .pane + .pane {
+    border-left: 0;
+  }
+
+  .workspace > .pane:not(.is-active) {
+    display: none;
+  }
+
+  .mobile-tabs {
+    display: flex;
+    border-top: 1px solid var(--rule);
+  }
+
+  .mobile-tabs button {
+    flex: 1;
+    padding: 0.75rem;
+    background: none;
+    border: 0;
+    color: var(--graphite);
+  }
+
+  .mobile-tabs button[aria-pressed="true"] {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .topbar {
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+  }
+
+  .wordmark {
+    font-size: var(--size-read);
+  }
+
+  /* The collection menu gives way first, so the bar never pushes the page wider than the screen. */
+  .topnav {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .notebook-picker {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .thread,
+  .composer,
+  .chat-head {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .library {
+    padding: 1rem;
+  }
+
+  .table .hide-narrow {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

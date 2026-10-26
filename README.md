@@ -9,7 +9,7 @@ One rule runs through the whole design: **every answer must be traceable to the 
 produced it.** Passages keep their location in the source, answers cite passages rather than whole
 sources, and a citation the model invents is removed instead of shown.
 
-> There is no frontend yet; the API is the interface (`/docs` serves an interactive reference).
+> The web app lives in `frontend/` (React and TypeScript); `/docs` serves the interactive API reference.
 > [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the internals in depth.
 > [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) records how the system was built, phase by
 > phase. The project began as an engine for Instagram Reels;
@@ -31,10 +31,11 @@ sources, and a citation the model invents is removed instead of shown.
 9. [Security and operations](#security-and-operations)
 10. [API overview](#api-overview)
 11. [Configuration](#configuration)
-12. [Running](#running)
-13. [Testing](#testing)
-14. [Project layout](#project-layout)
-15. [Limitations](#limitations)
+12. [The web app](#the-web-app)
+13. [Running](#running)
+14. [Testing](#testing)
+15. [Project layout](#project-layout)
+16. [Limitations](#limitations)
 
 ---
 
@@ -342,6 +343,20 @@ with its default. The ones you are most likely to change:
 
 ---
 
+## The web app
+
+`frontend/` is a React 19 and TypeScript app built with Vite. It has three panes: the collection's
+sources, which double as the conversation's scope (ticked sources are the ones a question can draw
+on); the conversation, where answers stream in and each citation is a highlighter mark; and a
+passage panel that opens beside it when you follow a citation, showing the cited passage with the
+sentence that supports the claim highlighted. The Library lists everything you have added and the
+collections built from it. On a phone the panes become tabs.
+
+The app talks only to the public API, and uses no state or router library beyond React. Answers
+stream with `fetch` rather than `EventSource`, because the stream endpoint is a POST.
+
+---
+
 ## Running
 
 ### Requirements
@@ -372,6 +387,21 @@ python -m venv .venv
 
 Then open `http://127.0.0.1:8000/docs`. Without Redis, set `TASK_RUNNER=local` in `.env`.
 
+The web app needs Node 20 or later. To work on it, run the API as above and, in a second terminal:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+and open `http://127.0.0.1:5173`; requests to `/api` are proxied to the API (`API_URL` overrides the
+default `http://127.0.0.1:8000`). To have the API serve it instead, build it once:
+
+```bash
+cd frontend && npm run build
+```
+
+The API then serves the app at `/`, and `run.bat` opens it there.
+
 Optional backends (Whisper, BGE-M3, Qdrant, the Anthropic SDK, boto3, RapidOCR, trafilatura,
 youtube-transcript-api, and Transformers for Qwen) are in `requirements-optional.txt`:
 
@@ -385,8 +415,9 @@ youtube-transcript-api, and Transformers for Qwen) are in `requirements-optional
 docker compose up --build
 ```
 
-This starts the API (`:8000`), a Celery worker, PostgreSQL 16, Redis 7, MinIO (`:9000`), and Qdrant
-(`:6333`). The image includes FFmpeg and Tesseract; provider settings pass through from your shell.
+This starts the API with the web app (`:8000`), a Celery worker, PostgreSQL 16, Redis 7, MinIO
+(`:9000`), and Qdrant (`:6333`). The image builds the web app in a Node stage and includes FFmpeg and
+Tesseract; provider settings pass through from your shell.
 
 ---
 
@@ -419,6 +450,7 @@ app/
   services/        ingestion, links and fetching, chunking, retrieval, chat, analysis,
                    verification, storage, evaluation
   workers/         Celery app, tasks, pipeline stages
+frontend/          React web app (src/components: workspace, sources, chat, passage, library)
 tests/             pytest suite
 data/              SQLite database, working media, local object store (git-ignored)
 alembic.ini, Dockerfile, docker-compose.yml, run.bat, requirements*.txt, .env.example
@@ -428,7 +460,10 @@ alembic.ini, Dockerfile, docker-compose.yml, run.bat, requirements*.txt, .env.ex
 
 ## Limitations
 
-- **No frontend yet.** The API is complete; a client is still to be built.
+- **Jobs are started by the client.** Adding a source queues it, and the web app then dispatches
+  it; a client using the API directly must call `POST /api/jobs/{id}/dispatch` itself.
+- **The web app has no sign-in screen yet.** It uses the development identity, so turn on
+  `AUTH_REQUIRED` only for API clients until one is added.
 - **The defaults are baselines.** Without configuration, answers quote passages instead of
   composing them, embeddings are lexical, audio cannot be transcribed, and images are searchable
   by their OCR text only. Configure a chat model, dense embeddings, and perception providers for

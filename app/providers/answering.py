@@ -59,9 +59,14 @@ def _query_terms(question: str) -> set[str]:
 
 
 def _best_sentence(text: str, terms: set[str]) -> str:
+    return _scored_sentence(text, terms)[1]
+
+
+def _scored_sentence(text: str, terms: set[str]) -> tuple[int, str]:
+    """The sentence sharing the most query terms, and how many it shares. With none, the first."""
     sentences = [sentence.strip() for sentence in _SENTENCE_PATTERN.split(text) if sentence.strip()]
     if not sentences:
-        return ""
+        return 0, ""
     scored = [
         (sum(1 for term in terms if term in sentence.lower()), -index, sentence)
         for index, sentence in enumerate(sentences)
@@ -69,7 +74,7 @@ def _best_sentence(text: str, terms: set[str]) -> str:
     overlap, _, sentence = max(scored)
     if overlap == 0:
         sentence = sentences[0]
-    return sentence[:400]
+    return overlap, sentence[:400]
 
 
 class ExtractiveChatProvider(ChatProvider):
@@ -89,13 +94,12 @@ class ExtractiveChatProvider(ChatProvider):
 
     def stream_answer(self, history: list[ChatTurn], question: str, evidence: list[EvidenceChunk]) -> Iterator[str]:
         terms = _query_terms(question)
-        lines = []
-        for number, chunk in enumerate(evidence, start=1):
-            sentence = _best_sentence(chunk.text, terms)
-            if sentence:
-                lines.append(f"- {sentence} [{number}]")
-            if len(lines) >= 5:
-                break
+        scored = [(number, *_scored_sentence(chunk.text, terms)) for number, chunk in enumerate(evidence, start=1)]
+        # Quote only passages that share words with the question; a passage retrieved for its meaning
+        # alone would otherwise be quoted by its first line, which is often just a heading.
+        relevant = [(number, sentence) for number, overlap, sentence in scored if overlap > 0 and sentence]
+        chosen = relevant or [(number, sentence) for number, _, sentence in scored if sentence][:2]
+        lines = [f"- {sentence} [{number}]" for number, sentence in chosen[:5]]
         if not lines:
             yield NO_EVIDENCE_ANSWER
             return

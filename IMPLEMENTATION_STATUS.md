@@ -1277,3 +1277,35 @@ verified against live models: neither Claude nor Ollama was called.
   as history.
 - Test fixtures that used workout data were converted to generic examples, so the suite reads like
   the product it tests.
+
+## Completed — the web app (2026-10-26)
+
+`frontend/` is a React 19 + TypeScript app built with Vite, with no dependencies beyond React.
+
+- **Workspace per collection, in three panes.** Sources on the left are a checklist that doubles as
+  the conversation's scope, saved to the conversation as you tick. The conversation in the middle
+  streams answers over the SSE endpoint (`fetch` with a stream reader, since it is a POST) and
+  renders each `[n]` as a highlighter mark. Following a citation opens the passage on the right,
+  plain text marked with a highlighter rule, with the one sentence that best matches the claim the
+  citation sits on highlighted; no sentence is highlighted when none clearly matches. Opening a
+  source instead shows its details, the original file, and Try again for failed sources.
+- **Library** lists every source with its status and lets you add it to any collection or delete
+  it, and lists and creates collections. Adding a file, link, or pasted text happens in one dialog;
+  a duplicate of something already in the library is added to the collection instead of refused.
+  The app dispatches processing for new sources and polls while any is still being read.
+- **Design.** Cool paper (`#F1F3F4`), slate ink, and one accent, highlighter yellow, used only for
+  things that came from a source. Atkinson Hyperlegible Next for the interface, Newsreader for
+  answers and passages. Dark mode, visible focus, reduced motion respected; below 900px the panes
+  become tabs.
+- **Serving.** FastAPI serves `frontend/dist` at `/` when it exists; the Dockerfile builds it in a
+  Node stage. Development uses `npm run dev` with `/api` proxied.
+
+Backend changes made while building it: citations now carry the whole cited chunk rather than its
+first 300 characters, so the passage panel can show it in context; and the extractive chat provider
+quotes only passages that share words with the question, instead of quoting an unrelated passage's
+first line (often just a heading).
+
+Verified in a browser against a scratch database: creating a collection, adding sources, streaming
+an answer with linked citations, a follow-up searched with the conversation's context, the passage
+panel's sentence highlight, the Library, light and dark modes, and a 375px phone layout with no
+horizontal overflow.

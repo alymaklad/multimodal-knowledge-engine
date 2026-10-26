@@ -41,9 +41,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Open the web app when it has been built (npm run build in frontend\), otherwise the API docs.
+set "OPEN=/docs"
+if exist "%~dp0frontend\dist\index.html" set "OPEN=/"
+
 echo.
 echo   Multimodal Knowledge Engine
 echo   ---------------------------------------------------------------
+if exist "%~dp0frontend\dist\index.html" echo   App         http://127.0.0.1:%PORT%/
 echo   API docs    http://127.0.0.1:%PORT%/docs
 echo   Health      http://127.0.0.1:%PORT%/health
 echo.
@@ -54,7 +59,7 @@ echo.
 
 REM Open the browser once the server is actually accepting connections, so the
 REM first page load does not land on a connection error.
-start "" /min cmd /c "for /l %%i in (1,1,30) do (curl -s -o nul http://127.0.0.1:%PORT%/health && start "" http://127.0.0.1:%PORT%/docs && exit) & timeout /t 1 /nobreak >nul"
+start "" /min cmd /c "for /l %%i in (1,1,30) do (curl -s -o nul http://127.0.0.1:%PORT%/health && start "" http://127.0.0.1:%PORT%%OPEN% && exit) & timeout /t 1 /nobreak >nul"
 
 "%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT% --reload --no-access-log
 

@@ -199,7 +199,8 @@ def resolve_citations(
                 "content_type": chunk.content_type,
                 "locator": item.locator,
                 "citation": chunk.citation,
-                "snippet": chunk.text[:300],
+                # The whole cited chunk (bounded by CHUNK_MAX_CHARACTERS), so a reader sees it in context.
+                "snippet": chunk.text,
             }
         )
     return cleaned.strip(), citations

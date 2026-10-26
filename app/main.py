@@ -1,9 +1,11 @@
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -155,3 +157,10 @@ def readiness_check() -> dict[str, str]:
     except Exception:
         return JSONResponse(status_code=503, content={"status": "unavailable", "database": "unavailable"})
     return {"status": "ready", "database": "ok"}
+
+
+# The web interface, when it has been built (`npm run build` in frontend/). Mounted last so every API
+# route, /docs, and the health checks take precedence over it.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
