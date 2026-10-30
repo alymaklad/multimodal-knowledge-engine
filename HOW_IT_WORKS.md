@@ -208,14 +208,49 @@ All three modes rank the **same stored chunks**, which is what lets them be fuse
 - **Lexical** is BM25 (k1 = 1.2, b = 0.75) over the chunks in scope, computed on the fly. It is the
   right tool for exact names and terms, which dense vectors blur.
 - **Semantic** asks the vector store for the nearest chunks among the eligible sources.
-- **Hybrid** fuses the two rankings with reciprocal rank fusion (k = 60). Ranks are fused, not
-  scores, because BM25 scores and cosine similarities are on unrelated scales.
+- **Graph** ranks the chunks that mention an entity named in the question (weight 2) or an entity
+  linked to one (weight 1), each scaled by how rare the entity is across the sources in scope, like
+  IDF. An entity every source mentions says little about which one answers.
+- **Hybrid** fuses the rankings with reciprocal rank fusion (k = 60). Ranks are fused, not scores,
+  because BM25 scores, cosine similarities, and graph weights are on unrelated scales.
 - **Reranking** runs over a wider candidate window (`RERANK_CANDIDATES`) than the page asked for,
   because its value is promoting what earlier stages ranked just below the cut.
 
 Search results group chunks by source and keep up to three passages, each with its locator and a
 label from `describe_locator`. Answer evidence stays at chunk level: hybrid, reranked, and cut to
 `RAG_EVIDENCE_LIMIT` passages.
+
+A **whole-collection question** is recognised by its wording ("main themes", "overview", "across my
+sources") and its evidence is spread: the best chunk of each source first, then for any source still
+missing, its most entity-dense chunk, then the rest in ranked order. Without this, "what do my
+sources cover?" is answered from the two sources that happen to use those words.
+
+### The knowledge graph
+
+Built by `app/services/graph.py` at the end of indexing, from the same chunks that were just stored.
+
+- The extractor (`GRAPH_PROVIDER`) reads each chunk once. The local one takes acronyms and
+  identifiers (BM25, monoBERT, nDCG) and capitalised names that are not merely opening a sentence,
+  and links entities named in the same or consecutive sentences. Claude and Ollama return entities
+  with kinds and stated relationships ("BEIR evaluated DPR") through a JSON schema.
+- An `Entity` belongs to the owner, so two sources naming DPR share one entity. Each
+  `EntityMention` and `EntityRelation` records the source and chunk key it came from, which keeps
+  everything the graph reaches citable.
+- Reindexing replaces a source's mentions and relations; reprocessing and deletion remove them, and
+  entities nothing mentions any more are pruned.
+- A summary is written at the same time: the source's most entity-central sentences, verbatim, by
+  default, or a model's two-to-four-sentence overview. It is shown to people and never given to the
+  answer model as evidence.
+- A failing extractor or summarizer is logged and skipped. The graph only adds a ranking signal, so a
+  model outage leaves the source searchable rather than failing its job.
+
+### Evaluation
+
+`python -m app.evaluation.retrieval` runs twenty labelled questions over eight short sources in
+`evals/retrieval/` through the real pipeline. Exact and paraphrase questions have one answering
+passage; multi-hop questions need two passages from different sources; global questions are scored
+by how many of the relevant sources appear at all. The test suite runs it and guards the current
+numbers, so a chunking or ranking change that hurts retrieval fails a test.
 
 ---
 
@@ -279,6 +314,7 @@ collections ─┬─ collection_sources ─┬─ sources ─┬─ processing_
              │                       │            ├─ transcripts, ocr_results, visual_analyses
              │                       │            ├─ extracted_content ── extraction_corrections
              │                       │            ├─ content_embeddings     (chunks + vectors)
+             │                       │            ├─ entity_mentions, entity_relations ── entities (per user)
              │                       │            ├─ stored_objects         (durable copies)
              │                       │            ├─ processing_provenance, stage_metrics
              └─ conversations ── chat_messages

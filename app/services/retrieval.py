@@ -5,6 +5,12 @@ chunk by chunk. Lexical scoring is BM25, computed over the chunks of the sources
 scoring is the vector store's similarity. Search results group chunks back into sources, while
 evidence for answering stays at chunk level so a citation can name a page or a moment.
 
+A third ranking comes from the knowledge graph: chunks that mention an entity the question names,
+and, more weakly, chunks that mention that entity's neighbours. That is what connects a question
+about Qdrant to the passage about who proposed HNSW, when the two never share a sentence. Questions
+about the collection as a whole ("what are the main themes?") are routed differently: their evidence
+is spread across sources instead of stacked from the few that match best.
+
 Retrieval reads only what indexing stored. A source that has not been indexed is invisible to every
 mode, which keeps lexical and dense results consistent with each other.
 """
@@ -18,16 +24,18 @@ from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.collection import CollectionSource
 from app.models.embedding import ContentEmbedding
+from app.models.graph import Entity, EntityMention, EntityRelation
 from app.models.source import Source
 from app.core.config import get_settings
 from app.providers.embeddings import get_embedding_provider
 from app.providers.reranking import RerankProvider, get_rerank_provider
 from app.schemas.search import SearchMode, SearchPassage, SearchResult
+from app.providers.graph_local import normalize_entity
 from app.services.chunking import SUMMARY_CHUNK_KEY, describe_locator
 from app.services.membership import collection_source_ids
 from app.services.vector_store import get_vector_store
@@ -37,6 +45,16 @@ BM25_K1 = 1.2
 BM25_B = 0.75
 PASSAGES_PER_RESULT = 3
 _TOKEN = re.compile(r"\w+")
+# Graph ranking: an entity the question names counts twice as much as one linked to it.
+GRAPH_DIRECT_WEIGHT = 2.0
+GRAPH_NEIGHBOUR_WEIGHT = 1.0
+_GLOBAL_QUESTION = re.compile(
+    r"\b(?:main|key|common|recurring|overall|major)\s+(?:topics|themes|ideas|points|takeaways|findings)\b"
+    r"|\b(?:overview|summari[sz]e|summary|big picture)\b"
+    r"|\b(?:all|every|each|across)\s+(?:of\s+)?(?:my|the|these|this)?\s*(?:sources?|documents?|files?|collection|notes?)\b"
+    r"|\bwhat\s+(?:topics|themes|subjects)\b",
+    re.IGNORECASE,
+)
 # The summary chunk restates a source's other chunks; it serves whole-source comparison only.
 _NOT_RETRIEVED = (SUMMARY_CHUNK_KEY,)
 
@@ -215,7 +233,7 @@ def hybrid_search(
     window = limit * PASSAGES_PER_RESULT * 2
     lexical, _ = _lexical_chunks(db, eligible.keys(), query, content_type)
     dense = _dense_chunks(db, eligible.keys(), query, window, content_type)
-    fused = _fuse(lexical[:window], dense)
+    fused = _fuse(lexical[:window], dense, _graph_chunks(db, eligible.keys(), query, content_type)[:window])
     lexical_sources = {chunk.source_id for chunk in lexical[:window]}
     dense_sources = {chunk.source_id for chunk in dense}
     results = _group(fused, eligible, "hybrid", lambda chunk: round(chunk.score, 6))
@@ -235,7 +253,11 @@ def retrieve_evidence(
     source_ids: Iterable[int] | None = None,
     reranker: RerankProvider | None = None,
 ) -> list[RetrievedEvidence]:
-    """Chunk-level evidence for grounded answering: hybrid retrieval, then reranking of the chunks."""
+    """Chunk-level evidence for grounded answering: hybrid and graph retrieval, then reranking.
+
+    A whole-collection question gets at most one chunk per source until every source in scope has
+    one, so its evidence describes the collection rather than its best-matching corner.
+    """
     scope = resolve_scope(db, collection_id, source_ids)
     if not scope:
         return []
@@ -243,8 +265,12 @@ def retrieve_evidence(
     window = max(limit * 3, get_settings().rerank_candidates)
     lexical, _ = _lexical_chunks(db, scope, query, content_type)
     dense = _dense_chunks(db, scope, query, window, content_type)
-    candidates = _fuse(lexical[:window], dense)[:window]
-    ordered = _rerank(query, candidates, [chunk.text for chunk in candidates], reranker)[:limit]
+    graph = _graph_chunks(db, scope, query, content_type)
+    candidates = _fuse(lexical[:window], dense, graph[:window])[:window]
+    ordered = _rerank(query, candidates, [chunk.text for chunk in candidates], reranker)
+    if get_settings().route_global_questions and is_global_question(query):
+        ordered = _spread_across_sources(db, scope, ordered, limit, content_type)
+    ordered = ordered[:limit]
     return [
         RetrievedEvidence(
             source_id=chunk.source_id,
@@ -258,6 +284,138 @@ def retrieve_evidence(
         )
         for chunk in ordered
         if chunk.source_id in labels
+    ]
+
+
+def is_global_question(query: str) -> bool:
+    """Whether a question asks about the collection as a whole rather than something in it."""
+    return bool(_GLOBAL_QUESTION.search(query))
+
+
+def _graph_chunks(
+    db: Session, source_ids: Collection[int], query: str, content_type: str | None
+) -> list[_RankedChunk]:
+    """Chunks that mention an entity the question names, or an entity linked to one.
+
+    An entity mentioned by many sources says little about which of them answers, so each entity's
+    weight is scaled by its rarity across the sources in scope, as IDF does for words.
+    """
+    if not source_ids:
+        return []
+    scope = list(source_ids)
+    in_scope = db.execute(
+        select(Entity.id, Entity.normalized, func.count(func.distinct(EntityMention.source_id)))
+        .join(EntityMention, EntityMention.entity_id == Entity.id)
+        .where(EntityMention.source_id.in_(scope))
+        .group_by(Entity.id, Entity.normalized)
+    ).all()
+    if not in_scope:
+        return []
+    question = normalize_entity(query)
+    named = {
+        entity_id
+        for entity_id, normalized, _ in in_scope
+        if re.search(r"(?<!\w)" + re.escape(normalized) + r"(?!\w)", question)
+    }
+    if not named:
+        return []
+    neighbours: set[int] = set()
+    for subject_id, object_id in db.execute(
+        select(EntityRelation.subject_id, EntityRelation.object_id).where(
+            EntityRelation.source_id.in_(scope),
+            or_(EntityRelation.subject_id.in_(named), EntityRelation.object_id.in_(named)),
+        )
+    ):
+        neighbours.update({subject_id, object_id})
+    neighbours -= named
+
+    spread = {entity_id: sources for entity_id, _, sources in in_scope}
+    rarity = {entity_id: math.log(1 + len(scope) / spread.get(entity_id, 1)) for entity_id in named | neighbours}
+    weights = {entity_id: GRAPH_NEIGHBOUR_WEIGHT * rarity[entity_id] for entity_id in neighbours}
+    weights.update({entity_id: GRAPH_DIRECT_WEIGHT * rarity[entity_id] for entity_id in named})
+
+    scores: Counter[tuple[int, str]] = Counter()
+    for source_id, chunk_key, entity_id in db.execute(
+        select(EntityMention.source_id, EntityMention.chunk_key, EntityMention.entity_id).where(
+            EntityMention.source_id.in_(scope), EntityMention.entity_id.in_(list(weights))
+        )
+    ):
+        scores[(source_id, chunk_key)] += weights[entity_id]
+    return sorted(
+        (
+            _RankedChunk(chunk.source_id, chunk.chunk_key, chunk.content_type, chunk.text, chunk.locator, scores[chunk.key])
+            for chunk in _load_chunks(db, list(scores), content_type)
+        ),
+        key=lambda chunk: (-chunk.score, chunk.source_id, chunk.chunk_key),
+    )
+
+
+def _spread_across_sources(
+    db: Session, scope: list[int], ranked: list[_RankedChunk], limit: int, content_type: str | None
+) -> list[_RankedChunk]:
+    """The best chunk of each source first, then a representative chunk of each source not yet
+    present, then the remaining ranked chunks."""
+    first: dict[int, _RankedChunk] = {}
+    for chunk in ranked:
+        first.setdefault(chunk.source_id, chunk)
+    missing = [source_id for source_id in scope if source_id not in first]
+    if missing and len(first) < limit:
+        for chunk in _representative_chunks(db, missing, content_type):
+            first.setdefault(chunk.source_id, chunk)
+    chosen = {chunk.key for chunk in first.values()}
+    return list(first.values()) + [chunk for chunk in ranked if chunk.key not in chosen]
+
+
+def _representative_chunks(db: Session, source_ids: list[int], content_type: str | None) -> list[_RankedChunk]:
+    """For each source, the chunk naming the most entities, or its first chunk when it has no graph."""
+    best: dict[int, tuple[int, str]] = {}
+    for source_id, chunk_key, total in db.execute(
+        select(EntityMention.source_id, EntityMention.chunk_key, func.sum(EntityMention.count))
+        .where(EntityMention.source_id.in_(source_ids))
+        .group_by(EntityMention.source_id, EntityMention.chunk_key)
+    ):
+        if source_id not in best or total > best[source_id][0]:
+            best[source_id] = (total, chunk_key)
+    chunks = {
+        chunk.source_id: chunk
+        for chunk in _load_chunks(db, [(source_id, key) for source_id, (_, key) in best.items()], content_type)
+    }
+    for source_id in source_ids:
+        if source_id in chunks:
+            continue
+        statement = (
+            select(ContentEmbedding.chunk_key)
+            .where(ContentEmbedding.source_id == source_id, ContentEmbedding.content_type.notin_(_NOT_RETRIEVED))
+            .order_by(ContentEmbedding.position)
+            .limit(1)
+        )
+        if content_type is not None:
+            statement = statement.where(ContentEmbedding.content_type == content_type)
+        chunk_key = db.scalar(statement)
+        if chunk_key is not None:
+            for chunk in _load_chunks(db, [(source_id, chunk_key)], content_type):
+                chunks[source_id] = chunk
+    return [chunks[source_id] for source_id in source_ids if source_id in chunks]
+
+
+def _load_chunks(db: Session, keys: list[tuple[int, str]], content_type: str | None) -> list[_RankedChunk]:
+    if not keys:
+        return []
+    statement = select(
+        ContentEmbedding.source_id,
+        ContentEmbedding.chunk_key,
+        ContentEmbedding.content_type,
+        ContentEmbedding.text,
+        ContentEmbedding.locator,
+    ).where(
+        tuple_(ContentEmbedding.source_id, ContentEmbedding.chunk_key).in_(keys),
+        ContentEmbedding.content_type.notin_(_NOT_RETRIEVED),
+    )
+    if content_type is not None:
+        statement = statement.where(ContentEmbedding.content_type == content_type)
+    return [
+        _RankedChunk(row.source_id, row.chunk_key, row.content_type, row.text, dict(row.locator or {}), 0.0)
+        for row in db.execute(statement)
     ]
 
 

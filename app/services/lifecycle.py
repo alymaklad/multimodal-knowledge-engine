@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.source import Source
 from app.models.collection import Collection
+from app.services.graph import prune_orphan_entities
 from app.services.object_store import get_object_store, source_prefix
 
 
@@ -29,7 +30,11 @@ def delete_source_and_local_media(db: Session, source: Source) -> None:
                     child.rmdir()
             working_dir.rmdir()
     _remove_stored_objects(source)
+    user_id = source.user_id
     db.delete(source)
+    db.flush()
+    # Entities only this source named would otherwise linger in the owner's graph.
+    prune_orphan_entities(db, user_id)
     db.commit()
 
 

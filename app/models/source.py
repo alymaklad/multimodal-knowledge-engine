@@ -57,6 +57,9 @@ class Source(Base):
     duration: Mapped[float | None] = mapped_column(nullable=True)
     thumbnail_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     media_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # A short overview written from the source's own passages once it is indexed.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[SourceStatus] = mapped_column(Enum(SourceStatus), default=SourceStatus.pending, index=True)
     processing_version: Mapped[str] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -94,6 +97,12 @@ class Source(Base):
         back_populates="source", cascade="all, delete-orphan"
     )
     stage_metrics: Mapped[list["StageMetric"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+    entity_mentions: Mapped[list["EntityMention"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+    entity_relations: Mapped[list["EntityRelation"]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
     )
     segments: Mapped[list["SourceSegment"]] = relationship(

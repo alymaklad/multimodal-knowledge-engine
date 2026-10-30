@@ -548,6 +548,23 @@ h3 {
   -webkit-box-decoration-break: clone;
 }
 
+/* Written by the app, not quoted from the source, so it reads as body text without the highlighter rule. */
+.source-summary {
+  margin: 0.75rem 0 1.25rem;
+}
+
+.source-summary h3 {
+  margin: 0 0 0.3rem;
+  font-weight: 600;
+}
+
+.source-summary p {
+  font-family: var(--read);
+  font-size: var(--size-read);
+  line-height: 1.6;
+  margin: 0;
+}
+
 .detail-list {
   display: grid;
   grid-template-columns: auto 1fr;

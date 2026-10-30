@@ -30,6 +30,8 @@ class SourceRead(BaseModel):
     mime_type: str | None
     author: str | None
     description: str | None
+    # A short overview written at indexing time; for reading, never cited as evidence.
+    summary: str | None = None
     details: dict[str, Any]
     duration: float | None
     media_path: str | None

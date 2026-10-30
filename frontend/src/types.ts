@@ -12,6 +12,7 @@ export interface Source {
   mime_type: string | null;
   author: string | null;
   description: string | null;
+  summary: string | null;
   details: Record<string, unknown>;
   duration: number | null;
   status: SourceStatus;

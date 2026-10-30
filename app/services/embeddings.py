@@ -7,6 +7,7 @@ from app.models.collection import CollectionSource
 from app.models.source import Source
 from app.providers.embeddings import EmbeddingProvider, get_embedding_provider
 from app.services.chunking import build_chunks
+from app.services.graph import build_source_graph
 from app.services.vector_store import VectorPoint, VectorStore, get_vector_store
 
 
@@ -25,6 +26,8 @@ def index_source(
     provider = provider or get_embedding_provider()
     store = store or get_vector_store(db, dimensions=provider.dimensions)
     chunks = build_chunks(source)
+    # The graph and summary are rebuilt with the chunks, since mentions point at chunk keys.
+    build_source_graph(db, source, chunks)
     if not chunks:
         store.delete_source(source.id)
         return 0

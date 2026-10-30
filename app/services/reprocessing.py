@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualAnalysis
 from app.models.embedding import ContentEmbedding
+from app.models.graph import EntityMention, EntityRelation
 from app.models.provenance import ProcessingProvenance
 from app.models.segment import SourceSegment
 from app.models.stored_object import StoredObject
@@ -24,6 +25,10 @@ def reset_source_for_reprocessing(db: Session, source: Source) -> ProcessingJob:
     db.execute(delete(ProcessingProvenance).where(ProcessingProvenance.source_id == source.id))
     db.execute(delete(StoredObject).where(StoredObject.source_id == source.id))
     db.execute(delete(SourceSegment).where(SourceSegment.source_id == source.id))
+    db.execute(delete(EntityRelation).where(EntityRelation.source_id == source.id))
+    db.execute(delete(EntityMention).where(EntityMention.source_id == source.id))
+    source.summary = None
+    source.summary_model = None
 
     job = source.processing_job
     if job is None:

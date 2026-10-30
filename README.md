@@ -205,12 +205,50 @@ locator.
 |---|---|
 | `lexical` | BM25 over the chunks of the sources in scope; good for exact terms and names |
 | `semantic` | Vector similarity over the same chunks |
-| `hybrid` | Reciprocal rank fusion of both rankings per chunk, then the reranker |
+| `hybrid` | Reciprocal rank fusion of BM25, dense, and knowledge-graph rankings per chunk, then the reranker |
 
 Results group chunks by source and carry up to three passages, each with its locator and label.
 Filters: `content_type`, `author`, `topic`, `minimum_score`, and `source_ids` to search part of a
 collection. `POST /api/collections/{id}/ask` answers one question from hybrid, reranked,
 chunk-level evidence; `GET /api/collections/{id}/duplicates` finds near-identical sources.
+
+### Knowledge graph and summaries
+
+Indexing also reads every chunk for the entities it names (people, methods, systems, datasets) and
+the links between them, and writes a short summary of each source. Every entity mention and link
+points at the chunk it came from, so the graph only changes which chunks are retrieved; answers still
+cite passages, never the graph or a summary.
+
+- **Graph ranking.** Chunks that mention an entity the question names, or one linked to it, form a
+  third ranking fused with BM25 and dense retrieval. This is what finds the second half of a
+  multi-hop question ("who proposed the index Qdrant uses?").
+- **Whole-collection questions** ("what are the main themes across my sources?") get evidence
+  spread across sources, one passage each, instead of the few best-matching ones
+  (`ROUTE_GLOBAL_QUESTIONS`).
+- **Summaries** appear in the source panel of the web app and as `summary` on every source.
+
+`GRAPH_PROVIDER=local` (the default) uses rules and extractive summaries with no model; `claude` and
+`ollama` extract with a model, one call per chunk; `none` turns it off.
+
+### Measuring retrieval
+
+```bash
+.venv/Scripts/python -m app.evaluation.retrieval --k 3
+```
+
+ingests the labelled corpus in `evals/retrieval/` into a throwaway database through the real pipeline
+and reports hit, recall, MRR, and source coverage per question category (exact, paraphrase,
+multi-hop, global). With the default local providers (hashing embeddings, no reranker), at k = 3:
+
+| | Without the graph | With the graph and routing |
+|---|---|---|
+| Multi-hop hit / recall | 0.75 / 0.38 | 1.00 / 0.75 |
+| All questions hit | 0.90 | 0.95 |
+| Global coverage at k = 8 | 0.88 | 1.00 |
+
+With BGE-M3 embeddings and the cross-encoder reranker the corpus is already near its ceiling
+(multi-hop recall 0.88 either way), so the graph matters most when the retrievers are weak or the
+library is large.
 
 ---
 
@@ -260,6 +298,7 @@ Every model sits behind a contract in `app/providers/base.py`, chosen by configu
 | `SPEECH_PROVIDER` | `none` | `faster_whisper` |
 | `VISION_PROVIDER` | `evidence` (records which evidence exists) | `qwen` (local Qwen2.5-VL), `claude` |
 | `EXTRACTION_PROVIDER` | `rule_based` (key points in the evidence's own words) | `vision_fields`, `claude` |
+| `GRAPH_PROVIDER` | `local` (rule-based entities, extractive summaries) | `claude`, `ollama`, `none` |
 | `VECTOR_STORE` | `database` (exact scan) | `qdrant` |
 
 - **Claude chat** uses `claude-opus-5-5` (`CHAT_MODEL`), streams, sets effort explicitly
@@ -351,6 +390,7 @@ with its default. The ones you are most likely to change:
 | `EMBEDDING_PROVIDER`, `RERANKER` | `hashing`, `none` | Dense embeddings and reranking |
 | `SPEECH_PROVIDER`, `OCR_PROVIDER`, `VISION_PROVIDER` | `none`, `tesseract`, `evidence` | Perception for audio, images, video |
 | `CHUNK_MAX_CHARACTERS`, `CHUNK_OVERLAP_CHARACTERS` | `1500`, `200` | Chunk size; reindex after changing |
+| `GRAPH_PROVIDER`, `ROUTE_GLOBAL_QUESTIONS` | `local`, `true` | Knowledge graph and summaries; spreading whole-collection questions |
 | `FETCH_ALLOW_PRIVATE_HOSTS` | `false` | Allow links to local network addresses |
 | `AUTH_REQUIRED`, `SECRET_KEY` | `false`, empty | Real authentication |
 | `AUTO_MIGRATE` | `true` | Apply migrations at API startup |
@@ -446,7 +486,9 @@ Tesseract; provider settings pass through from your shell.
 The suite runs with no network, no model weights, and no API key: model clients are replaced by
 fakes, HTTP by mock transports, and test PDFs and Word files are generated on the fly. It covers
 ingestion and type checking, link safety, every processor, chunking and located retrieval, the
-chatbot and its providers, video analysis and confidence routing, storage, migrations, and auth.
+chatbot and its providers, the knowledge graph, video analysis and confidence routing, storage,
+migrations, and auth. It also runs the retrieval evaluation and fails if multi-hop or overall hit
+rates fall below what they are today.
 
 ---
 

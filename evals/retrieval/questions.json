@@ -1,0 +1,48 @@
+{
+  "about": "Labelled questions over evals/retrieval/corpus. A passage counts as found when a retrieved chunk from the named source contains the given text (case-insensitive). Global questions are scored by how many of the listed sources appear in the evidence.",
+  "questions": [
+    {"id": "exact-rrf-k", "category": "exact", "question": "What value of k does reciprocal rank fusion use?",
+     "expected": [{"source": "01-hybrid-retrieval-survey", "contains": "k is 60"}]},
+    {"id": "exact-bm25-b", "category": "exact", "question": "What is the standard value of b in BM25?",
+     "expected": [{"source": "02-bm25-tuning", "contains": "0.75"}]},
+    {"id": "exact-dpr-authors", "category": "exact", "question": "Who introduced DPR?",
+     "expected": [{"source": "03-dense-retrievers", "contains": "Karpukhin"}]},
+    {"id": "exact-monobert", "category": "exact", "question": "Who described monoBERT?",
+     "expected": [{"source": "04-rerankers", "contains": "Nogueira"}]},
+    {"id": "exact-beir-datasets", "category": "exact", "question": "How many datasets are in BEIR?",
+     "expected": [{"source": "07-evaluating-retrieval", "contains": "18 datasets"}]},
+    {"id": "exact-qdrant-language", "category": "exact", "question": "Which language is Qdrant written in?",
+     "expected": [{"source": "08-vector-databases", "contains": "Rust"}]},
+    {"id": "exact-leiden", "category": "exact", "question": "Which algorithm does GraphRAG use to find communities?",
+     "expected": [{"source": "06-graphrag", "contains": "Leiden"}]},
+    {"id": "exact-late-chunking", "category": "exact", "question": "Who proposed late chunking?",
+     "expected": [{"source": "05-chunking-strategies", "contains": "Jina AI"}]},
+
+    {"id": "para-no-calibration", "category": "paraphrase", "question": "How can I merge rankings from two systems whose scores are on different scales without calibrating them?",
+     "expected": [{"source": "01-hybrid-retrieval-survey", "contains": "no score normalisation"}]},
+    {"id": "para-repeated-words", "category": "paraphrase", "question": "How do I stop a word that is said over and over in speech recordings from dominating keyword search?",
+     "expected": [{"source": "02-bm25-tuning", "contains": "lower k1"}]},
+    {"id": "para-cheap-negatives", "category": "paraphrase", "question": "How can a retriever be trained without labelling separate wrong answers for every question?",
+     "expected": [{"source": "03-dense-retrievers", "contains": "in-batch negatives"}]},
+    {"id": "para-reranker-slow", "category": "paraphrase", "question": "Why does the second-stage scoring model get slower as I give it more candidates?",
+     "expected": [{"source": "04-rerankers", "contains": "latency grows"}]},
+    {"id": "para-lost-context", "category": "paraphrase", "question": "A piece of a document no longer says which company it is about once it is cut out. How do I fix that?",
+     "expected": [{"source": "05-chunking-strategies", "contains": "prepends a short explanation"}]},
+    {"id": "para-memory", "category": "paraphrase", "question": "How can I make my stored embeddings take four times less memory?",
+     "expected": [{"source": "08-vector-databases", "contains": "factor of four"}]},
+
+    {"id": "hop-karpukhin-benchmark", "category": "multi_hop", "question": "How did the retriever introduced by Karpukhin perform on BEIR compared with keyword search?",
+     "expected": [{"source": "07-evaluating-retrieval", "contains": "fell behind BM25"}, {"source": "03-dense-retrievers", "contains": "Karpukhin"}]},
+    {"id": "hop-qdrant-index-author", "category": "multi_hop", "question": "Who proposed the index structure that Qdrant uses?",
+     "expected": [{"source": "08-vector-databases", "contains": "indexes vectors with HNSW"}, {"source": "01-hybrid-retrieval-survey", "contains": "Malkov"}]},
+    {"id": "hop-monobert-contextual", "category": "multi_hop", "question": "How much did contextual retrieval improve when combined with the kind of model monoBERT is?",
+     "expected": [{"source": "05-chunking-strategies", "contains": "67"}, {"source": "04-rerankers", "contains": "monoBERT"}]},
+    {"id": "hop-bm25-robertson-dpr", "category": "multi_hop", "question": "Which method from Robertson's framework does DPR use to pick hard negatives?",
+     "expected": [{"source": "03-dense-retrievers", "contains": "hard negative"}, {"source": "02-bm25-tuning", "contains": "Robertson"}]},
+
+    {"id": "global-topics", "category": "global", "question": "What are the main topics covered across all my sources?",
+     "expected_sources": ["01-hybrid-retrieval-survey", "02-bm25-tuning", "03-dense-retrievers", "04-rerankers", "05-chunking-strategies", "06-graphrag", "07-evaluating-retrieval", "08-vector-databases"]},
+    {"id": "global-improve", "category": "global", "question": "Give me an overview of every way my sources suggest to make retrieval better.",
+     "expected_sources": ["01-hybrid-retrieval-survey", "02-bm25-tuning", "03-dense-retrievers", "04-rerankers", "05-chunking-strategies", "08-vector-databases"]}
+  ]
+}

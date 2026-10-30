@@ -12,8 +12,10 @@ from app.providers.base import (
     AnswerProvider,
     ChatProvider,
     ExtractionProvider,
+    GraphExtractor,
     ImageDescriber,
     OCRProvider,
+    Summarizer,
     VisionProvider,
 )
 from app.providers.local import (
@@ -111,3 +113,42 @@ def get_chat_provider() -> ChatProvider:
 
         return OllamaChatProvider()
     raise ValueError(f"Unsupported chat provider: {name}")
+
+
+def get_graph_extractor() -> GraphExtractor | None:
+    name = get_settings().graph_provider.lower()
+    if name == "none":
+        return None
+    if name in {"local", "rules"}:
+        from app.providers.graph_local import RuleGraphExtractor
+
+        return RuleGraphExtractor()
+    if name in {"claude", "anthropic"}:
+        from app.providers.graph_models import ClaudeGraphExtractor
+
+        return ClaudeGraphExtractor()
+    if name == "ollama":
+        from app.providers.graph_models import OllamaGraphExtractor
+
+        return OllamaGraphExtractor()
+    raise ValueError(f"Unsupported graph provider: {name}")
+
+
+def get_summarizer() -> Summarizer | None:
+    """Summaries follow GRAPH_PROVIDER, since both are written at indexing time."""
+    name = get_settings().graph_provider.lower()
+    if name == "none":
+        return None
+    if name in {"local", "rules"}:
+        from app.providers.graph_local import ExtractiveSummarizer
+
+        return ExtractiveSummarizer()
+    if name in {"claude", "anthropic"}:
+        from app.providers.graph_models import ClaudeSummarizer
+
+        return ClaudeSummarizer()
+    if name == "ollama":
+        from app.providers.graph_models import OllamaSummarizer
+
+        return OllamaSummarizer()
+    raise ValueError(f"Unsupported graph provider: {name}")

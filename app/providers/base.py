@@ -137,3 +137,43 @@ class ChatProvider(ABC):
         self, history: list[ChatTurn], question: str, evidence: list[EvidenceChunk]
     ) -> Iterator[str]:
         """Yield the answer as text fragments, in order."""
+
+
+@dataclass(frozen=True)
+class ExtractedEntity:
+    name: str
+    kind: str = "term"
+
+
+@dataclass(frozen=True)
+class ExtractedRelation:
+    subject: str
+    label: str
+    object: str
+
+
+@dataclass(frozen=True)
+class GraphExtraction:
+    entities: list[ExtractedEntity]
+    relations: list[ExtractedRelation]
+    model: str = "unknown"
+
+
+@dataclass(frozen=True)
+class SourceSummary:
+    text: str
+    model: str = "unknown"
+
+
+class GraphExtractor(ABC):
+    """Finds the entities a passage names and the relationships it states between them."""
+
+    @abstractmethod
+    def extract(self, text: str) -> GraphExtraction: ...
+
+
+class Summarizer(ABC):
+    """Writes a short overview of one source from its own passages."""
+
+    @abstractmethod
+    def summarize(self, title: str, passages: list[str]) -> SourceSummary: ...

@@ -132,6 +132,12 @@ function SourceView({ source, collectionId, onChanged, onClose }: { source: Sour
     <article>
       <p className="passage-source">{source.title}</p>
       {status && <p className={`passage-where${source.status === "failed" ? " error-text" : ""}`}>{status}</p>}
+      {source.summary && (
+        <section aria-label="Summary" className="source-summary">
+          <h3 className="small muted">Summary</h3>
+          <p>{source.summary}</p>
+        </section>
+      )}
       <dl className="detail-list" style={{ marginTop: status ? 0 : "1rem" }}>
         <dt>Type</dt>
         <dd>{KIND_LABEL[source.kind]}</dd>

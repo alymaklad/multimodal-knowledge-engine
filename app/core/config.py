@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     s3_prefix: str = ""
     signed_url_ttl_seconds: int = 900
     answer_provider: str = "extractive"
+    # The knowledge graph and source summaries built at indexing time: "local" (rules, no model),
+    # "claude", "ollama", or "none". A model provider makes one call per chunk, so indexing costs more.
+    graph_provider: str = "local"
+    # Whole-collection questions ("what are the main themes?") get evidence from every source.
+    route_global_questions: bool = True
     # The chatbot: "extractive" (no model, quotes passages), "claude", or "ollama" (local).
     chat_provider: str = "extractive"
     chat_model: str = "claude-opus-5-5"

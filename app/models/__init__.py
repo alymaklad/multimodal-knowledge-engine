@@ -1,6 +1,7 @@
 from app.models.analysis import ExtractedContent, OCRResult, Transcript, VisualAnalysis
 from app.models.benchmark import BenchmarkPrediction, BenchmarkRun
 from app.models.evaluation import EvaluationCase, EvaluationStatus
+from app.models.graph import Entity, EntityMention, EntityRelation
 from app.models.collection import Collection, CollectionSource
 from app.models.conversation import ChatMessage, Conversation
 from app.models.correction import ExtractionCorrection
@@ -22,6 +23,9 @@ __all__ = [
     "Collection",
     "CollectionSource",
     "Conversation",
+    "Entity",
+    "EntityMention",
+    "EntityRelation",
     "ExtractionCorrection",
     "ContentEmbedding",
     "ProcessingProvenance",
