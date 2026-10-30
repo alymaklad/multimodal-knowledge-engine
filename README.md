@@ -11,8 +11,7 @@ sources, and a citation the model invents is removed instead of shown.
 
 > The web app lives in `frontend/` (React and TypeScript); `/docs` serves the interactive API reference.
 > [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the internals in depth.
-> [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) records how the system was built, phase by
-> phase. The project began as an engine for Instagram Reels;
+> The project began as an engine for Instagram Reels;
 > [the original architecture](instagram_multimodal_knowledge_engine_architecture.md) is kept for
 > history.
 

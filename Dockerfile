@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY alembic.ini ./
 COPY --from=web /web/dist ./frontend/dist
-COPY README.md IMPLEMENTATION_STATUS.md ./
+COPY README.md ./
 
 RUN useradd --create-home appuser && mkdir -p /app/data/media && chown -R appuser:appuser /app
 USER appuser
