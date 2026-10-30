@@ -11,9 +11,6 @@ sources, and a citation the model invents is removed instead of shown.
 
 > The web app lives in `frontend/` (React and TypeScript); `/docs` serves the interactive API reference.
 > [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the internals in depth.
-> The project began as an engine for Instagram Reels;
-> [the original architecture](instagram_multimodal_knowledge_engine_architecture.md) is kept for
-> history.
 
 ---
 
@@ -130,6 +127,26 @@ Links are fetched by the worker, never in the request. Every redirect hop is che
 address a host resolves to must be public (unless `FETCH_ALLOW_PRIVATE_HOSTS` is on), and responses
 are size-capped and limited to types a processor can read. YouTube sources fetch the caption track
 through the optional `youtube-transcript-api` (written captions in a preferred language first).
+
+### Importing saved Instagram posts
+
+Saved Instagram posts that the InstagramCollections project already turned into knowledge cards
+(`knowledge/<collection>/<shortcode>.md` with `work/<collection>/<shortcode>/manifest.json` and
+transcripts beside them) are imported without running OCR, Whisper, or vision again:
+
+```text
+.venv\Scripts\python.exe -m app.services.instagram_import C:\InstagramCollections [--collection ai] [--queue-only]
+```
+
+- Each post becomes one Markdown source: the card summary, its exercises or tools with every field,
+  its other details, the caption, and the spoken words without timestamps. Section headings repeat
+  the post's title, so a chunk of exercises still says which workout it belongs to.
+- The creator is the source's author and the post URL its link, so the author filter and citations
+  work as for any source. The card's type and goals or topics form the topic the topic filter
+  matches (`workout: conditioning, strength`).
+- Each folder under `knowledge/` becomes a collection (`tamaren` is **Instagram · Workouts**, `ai` is
+  **Instagram · AI**). Running the import again leaves unchanged posts alone and reprocesses
+  changed cards. `--queue-only` leaves processing to the server's task runner.
 
 ---
 
