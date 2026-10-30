@@ -172,6 +172,73 @@ through `POST /api/sources/{id}/review`; corrections are stored separately from 
 
 ---
 
+## From passages to a cited answer
+
+Sections 4 to 6 describe one path. Indexing runs once per source, when processing finishes;
+answering runs for every question, and reads only what indexing stored.
+
+```mermaid
+flowchart TD
+    subgraph INDEX["Indexing: once per source"]
+        direction TB
+        P["Passages<br/>segments, transcript lines, on-screen text,<br/>each with a locator (page, time)"]
+        G["Group by stream and section"]
+        K["Pack into chunks<br/>≤ CHUNK_MAX_CHARACTERS,<br/>overlapping by CHUNK_OVERLAP_CHARACTERS"]
+        E["Embed each chunk<br/>EMBEDDING_PROVIDER"]
+        V[("content_embeddings / Qdrant<br/>text · vector · locator")]
+        X["Extract entities and links per chunk<br/>GRAPH_PROVIDER"]
+        KG[("entities · entity_mentions · entity_relations<br/>every row keeps its chunk key")]
+        S["Summarize the source"]
+        SS[("sources.summary<br/>shown to people, never cited")]
+        P --> G --> K
+        K --> E --> V
+        K --> X --> KG
+        K --> S --> SS
+    end
+
+    subgraph ASK["Answering: every question"]
+        direction TB
+        Q["Question"]
+        RW["Rewrite a follow-up into a standalone query<br/>(conversations with history)"]
+        SC["Scope: the collection's sources,<br/>or the ones selected"]
+        L["BM25 over chunks in scope"]
+        D["Dense: nearest chunk vectors"]
+        GR["Graph: chunks naming an entity in the question,<br/>or one linked to it"]
+        F["Reciprocal rank fusion, k = 60"]
+        RR["Rerank the candidate window<br/>RERANKER"]
+        GQ{"Whole-collection<br/>question?"}
+        SP["Spread: best chunk per source,<br/>then a representative chunk<br/>for each source still missing"]
+        TOP["Top RAG_EVIDENCE_LIMIT passages,<br/>numbered [1]…[n]"]
+        LLM["Chat provider streams the answer<br/>extractive · claude · ollama"]
+        CI["Resolve [n] markers into citations<br/>(source, page or time, passage);<br/>drop markers that point at nothing"]
+        OUT["Stored message with citations<br/>complete · failed · refused · interrupted"]
+        Q --> RW --> SC
+        SC --> L & D & GR
+        L --> F
+        D --> F
+        GR --> F
+        F --> RR --> GQ
+        GQ -- no --> TOP
+        GQ -- yes --> SP --> TOP
+        TOP --> LLM --> CI --> OUT
+    end
+
+    V -. read by .-> L
+    V -. read by .-> D
+    KG -. read by .-> GR
+```
+
+Three things the picture makes visible:
+
+- **Everything retrieved is a chunk.** BM25, vectors, and the graph rank the same stored chunks, so
+  any passage they surface carries the locator a citation needs. The graph never answers on its own.
+- **The summary is a dead end on purpose.** It feeds the app's source panel but has no arrow into
+  answering, so a claim can only cite something the source actually says.
+- **Answering never touches the original files.** Its only inputs are the stored chunks, vectors, and
+  graph rows; a changed chunking or graph setting needs a reindex to take effect.
+
+---
+
 ## 4. Chunking
 
 `app/services/chunking.py` builds retrieval chunks from a source's **passages**. For processed
